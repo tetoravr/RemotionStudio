@@ -1,0 +1,561 @@
+{
+  "version": 1,
+  "id": "sushitop-ocr",
+  "title": "SUSHI TOP OCR 30秒CM",
+  "format": "vertical",
+  "fps": 30,
+  "brand": {
+    "name": "SUSHI TOP OCR",
+    "tagline": "レシートを撮るだけで、\n[[購買]]がキャンペーンになる。",
+    "colors": {
+      "primary": "#ff6900",
+      "dark": "#231f20",
+      "accent": "#ffd43b",
+      "light": "#fff5ee",
+      "text": "#231f20"
+    },
+    "font": "noto"
+  },
+  "cast": [
+    {
+      "id": "hero",
+      "name": "ユイ",
+      "persona": "SUSHI TOP OCRの案内役。明るく元気で、メーカーの販促担当者の悩みに寄り添う",
+      "kind": "image",
+      "images": {
+        "default": "assets/yui_default.webp",
+        "happy": "assets/yui_happy.webp",
+        "surprised": "assets/yui_surprised.webp",
+        "sad": "assets/yui_sad.webp",
+        "think": "assets/yui_think.webp",
+        "point": "assets/yui_point.webp",
+        "wave": "assets/yui_wave.webp",
+        "wink": "assets/yui_wink.webp"
+      },
+      "voice": {
+        "voice": "coral",
+        "instructions": "明るく元気な、アニメの女の子の声。早口ぎみにテンポよく、語尾をはずませて楽しそうに話す。間をあけない。",
+        "speed": 1.3
+      }
+    },
+    {
+      "id": "buddy",
+      "name": "シャリまる",
+      "persona": "サーモンのにぎり寿司のマスコット。とぼけた性格で、視聴者（販促担当者）の本音を代弁する",
+      "kind": "builtin",
+      "builtin": {
+        "shape": "sushi",
+        "bodyColor": "#ffffff",
+        "emblem": ""
+      },
+      "images": {},
+      "voice": {
+        "voice": "fable",
+        "instructions": "小さくてかわいいマスコットキャラクターの声。少し高めで、とぼけた感じ。テンポよく。",
+        "speed": 1.2
+      }
+    }
+  ],
+  "audio": {
+    "bgmVolume": 0.3,
+    "bpm": 150,
+    "sfx": true,
+    "sfxVolume": 0.6,
+    "narration": true,
+    "narrationVolume": 1
+  },
+  "subtitles": false,
+  "brief": {
+    "productName": "SUSHI TOP OCR",
+    "oneLiner": "レシート撮影で購買証明を取り、AI判定→特典配布→分析まで一気通貫で行うレシート販促ソリューション",
+    "target": "メーカー・小売などで販促キャンペーンを運用するマーケティング担当者",
+    "problems": "マストバイ施策（レシートキャンペーン）の運用コストが高い／実店舗で自社商品が何と一緒に買われているか分からない／独自販促アプリの立ち上げ・維持コストが高い",
+    "features": "参加者はレシートを撮影して送信するだけ\nAIが商品・金額・決済手段・店舗・日時を読み取り、応募条件と自動照合してその場でNFT特典を配布\n対象商品（最大3商品）・合計金額・決済手段などの条件で特典を出し分け、同一レシートの重複登録もブロック\nPOS改修不要。店舗別・日付別・商品別の購買データ（併売傾向を含む）を分析",
+    "proof": "レシート判定・キャンペーン運用の一部の仕組みは特許出願中",
+    "cta": "サービス資料をダウンロード（資料請求）",
+    "contact": "sushitopmarketing.com",
+    "tone": "ポップで分かりやすく、BtoBの信頼感も残す",
+    "durationSec": 30,
+    "notes": "機能の説明ではなく価値を伝える。画面はイメージである旨を注記"
+  },
+  "scenes": [
+    {
+      "id": "s1",
+      "type": "logo",
+      "transition": "cut",
+      "ticker": true,
+      "logoText": "SUSHI TOP\nOCR",
+      "lines": [
+        {
+          "id": "l1",
+          "speaker": "hero",
+          "text": "SUSHI TOP OCR！",
+          "speak": "スシトップ オーシーアール！",
+          "style": "none",
+          "pose": "happy",
+          "audio": {
+            "src": "audio/l1-079426f3ddd614.wav",
+            "durationSec": 1.9164625850340136,
+            "hash": "079426f3ddd614"
+          }
+        }
+      ],
+      "characters": [
+        {
+          "id": "buddy",
+          "position": "far-left",
+          "size": "m",
+          "enter": "jump",
+          "pose": "happy"
+        },
+        {
+          "id": "hero",
+          "position": "right",
+          "size": "l",
+          "enter": "jump",
+          "enterDelaySec": 0.15,
+          "pose": "happy"
+        }
+      ]
+    },
+    {
+      "id": "s2",
+      "type": "talk",
+      "transition": "cut",
+      "showLogo": true,
+      "decor": "question",
+      "lines": [
+        {
+          "id": "l2",
+          "speaker": "buddy",
+          "text": "……って、なに？",
+          "style": "bubble",
+          "pose": "think",
+          "audio": {
+            "src": "audio/l2-1e31e237997f2c.wav",
+            "durationSec": 0.5752154195011338,
+            "hash": "1e31e237997f2c"
+          }
+        }
+      ],
+      "characters": [
+        {
+          "id": "buddy",
+          "position": "center",
+          "size": "m",
+          "enter": "pop",
+          "pose": "think"
+        },
+        {
+          "id": "hero",
+          "position": "far-right",
+          "size": "m",
+          "enter": "slide",
+          "enterDelaySec": 0.6,
+          "pose": "surprised"
+        }
+      ]
+    },
+    {
+      "id": "s3",
+      "type": "talk",
+      "transition": "wipe",
+      "decor": "none",
+      "prop": {
+        "icon": "receipt",
+        "badge": "ng",
+        "label": "コストが高い…"
+      },
+      "lines": [
+        {
+          "id": "l3",
+          "speaker": "hero",
+          "text": "マストバイ施策、\n高くつかない？",
+          "style": "bubble-accent",
+          "pose": "think",
+          "audio": {
+            "src": "audio/l3-0e85ab4733f95c.wav",
+            "durationSec": 2.2728117913832198,
+            "hash": "0e85ab4733f95c"
+          }
+        },
+        {
+          "id": "l4",
+          "speaker": "buddy",
+          "text": "専用アプリも\n大変だった〜……",
+          "style": "bubble",
+          "pose": "sad",
+          "audio": {
+            "src": "audio/l4-047436954c772a.wav",
+            "durationSec": 2.3679591836734692,
+            "hash": "047436954c772a"
+          }
+        }
+      ],
+      "characters": [
+        {
+          "id": "buddy",
+          "position": "far-left",
+          "size": "s",
+          "enter": "pop"
+        },
+        {
+          "id": "hero",
+          "position": "right",
+          "size": "xl",
+          "enter": "slide",
+          "pose": "think"
+        }
+      ]
+    },
+    {
+      "id": "s4",
+      "type": "logo",
+      "transition": "flash",
+      "ticker": true,
+      "logoText": "SUSHI TOP\nOCR",
+      "subtitle": "レシートを撮るだけで、\n[[購買]]がキャンペーンになる。",
+      "lines": [
+        {
+          "id": "l5",
+          "speaker": "hero",
+          "text": "だったら、\nSUSHI TOP OCR！",
+          "speak": "だったら、スシトップ オーシーアール！",
+          "style": "bubble",
+          "pose": "point",
+          "audio": {
+            "src": "audio/l5-030906196232c0.wav",
+            "durationSec": 2.987097505668934,
+            "hash": "030906196232c0"
+          }
+        },
+        {
+          "id": "l6",
+          "speaker": "buddy",
+          "text": "なにがいいの！？",
+          "style": "bubble",
+          "pose": "surprised",
+          "audio": {
+            "src": "audio/l6-0419857148ac25.wav",
+            "durationSec": 1.0108843537414967,
+            "hash": "0419857148ac25"
+          }
+        }
+      ],
+      "characters": [
+        {
+          "id": "buddy",
+          "position": "far-left",
+          "size": "m",
+          "enter": "pop"
+        },
+        {
+          "id": "hero",
+          "position": "right",
+          "size": "l",
+          "enter": "none",
+          "pose": "point"
+        }
+      ]
+    },
+    {
+      "id": "s5",
+      "type": "feature",
+      "transition": "wipe",
+      "eyebrow": "[[レシート]]を撮るだけで",
+      "headline": "AIが自動判定！",
+      "footnote": "※条件を満たすと、その場でNFT特典を配布",
+      "visual": {
+        "kind": "flow",
+        "from": "camera",
+        "to": "gift",
+        "fromLabel": "撮影して送信",
+        "toLabel": "特典をGET",
+        "effect": "confetti"
+      },
+      "lines": [
+        {
+          "id": "l7",
+          "speaker": "hero",
+          "text": "レシートを撮るだけで",
+          "style": "none",
+          "audio": {
+            "src": "audio/l7-06b3066fbb814d.wav",
+            "durationSec": 1.3903401360544219,
+            "hash": "06b3066fbb814d"
+          }
+        },
+        {
+          "id": "l8",
+          "speaker": "hero",
+          "text": "AIが自動判定！",
+          "style": "none",
+          "audio": {
+            "src": "audio/l8-1b5516f3fc6156.wav",
+            "durationSec": 1.3014739229024943,
+            "hash": "1b5516f3fc6156"
+          }
+        },
+        {
+          "id": "l9",
+          "speaker": "buddy",
+          "text": "マジで！？",
+          "style": "bubble",
+          "pose": "surprised",
+          "audio": {
+            "src": "audio/l9-172437b16f968d.wav",
+            "durationSec": 0.7787301587301587,
+            "hash": "172437b16f968d"
+          }
+        }
+      ],
+      "characters": [
+        {
+          "id": "buddy",
+          "position": "center",
+          "size": "s",
+          "enter": "pop"
+        }
+      ]
+    },
+    {
+      "id": "s6",
+      "type": "feature",
+      "transition": "slide",
+      "eyebrow": "商品・金額・[[決済手段]]で",
+      "headline": "特典を出し分け！",
+      "footnote": "※同じレシートの重複登録もブロック",
+      "visual": {
+        "kind": "icons",
+        "items": [
+          {
+            "icon": "cart",
+            "label": "対象商品"
+          },
+          {
+            "icon": "yen",
+            "label": "合計金額"
+          },
+          {
+            "icon": "card",
+            "label": "決済手段"
+          }
+        ]
+      },
+      "lines": [
+        {
+          "id": "l10",
+          "speaker": "hero",
+          "text": "商品・金額・決済手段で",
+          "style": "none",
+          "audio": {
+            "src": "audio/l10-099c36f93220b1.wav",
+            "durationSec": 1.9643083900226757,
+            "hash": "099c36f93220b1"
+          }
+        },
+        {
+          "id": "l11",
+          "speaker": "hero",
+          "text": "特典を出し分け！",
+          "style": "none",
+          "audio": {
+            "src": "audio/l11-16f28d3a7416bb.wav",
+            "durationSec": 1.5587301587301587,
+            "hash": "16f28d3a7416bb"
+          }
+        },
+        {
+          "id": "l12",
+          "speaker": "buddy",
+          "text": "いいね〜！",
+          "style": "bubble",
+          "pose": "happy",
+          "audio": {
+            "src": "audio/l12-0a792bd59f9535.wav",
+            "durationSec": 0.6700907029478458,
+            "hash": "0a792bd59f9535"
+          }
+        }
+      ],
+      "characters": [
+        {
+          "id": "buddy",
+          "position": "far-left",
+          "size": "s",
+          "enter": "jump"
+        },
+        {
+          "id": "hero",
+          "position": "far-right",
+          "size": "m",
+          "enter": "jump",
+          "pose": "wink"
+        }
+      ]
+    },
+    {
+      "id": "s7",
+      "type": "feature",
+      "transition": "zoom",
+      "background": "burst-dark",
+      "eyebrow": "[[POS改修]]なしで",
+      "headline": "購買データを分析！",
+      "footnote": "※店舗別・日付別・商品別に併売傾向まで",
+      "visual": {
+        "kind": "jump",
+        "obstacleLabel": "POS改修",
+        "goal": "chart"
+      },
+      "lines": [
+        {
+          "id": "l13",
+          "speaker": "hero",
+          "text": "POS改修なしで",
+          "speak": "ポス改修なしで",
+          "style": "none",
+          "audio": {
+            "src": "audio/l13-0968a267808e7d.wav",
+            "durationSec": 1.1365532879818594,
+            "hash": "0968a267808e7d"
+          }
+        },
+        {
+          "id": "l14",
+          "speaker": "hero",
+          "text": "購買データを分析！",
+          "style": "none",
+          "audio": {
+            "src": "audio/l14-01b509c8045a61.wav",
+            "durationSec": 1.688843537414966,
+            "hash": "01b509c8045a61"
+          }
+        }
+      ],
+      "characters": [
+        {
+          "id": "hero",
+          "position": "far-right",
+          "size": "m",
+          "enter": "slide",
+          "pose": "happy"
+        }
+      ]
+    },
+    {
+      "id": "s8",
+      "type": "showcase",
+      "transition": "wipe",
+      "title": "判定から特典まで\n[[その場で完了]]。",
+      "note": "※画面はイメージです",
+      "mockup": {
+        "appName": "SUSHI TOP OCR",
+        "heading": "レシート判定結果",
+        "items": [
+          {
+            "label": "対象商品：お茶",
+            "value": "対象"
+          },
+          {
+            "label": "対象商品：おにぎり",
+            "value": "対象"
+          },
+          {
+            "label": "お支払い：PayPay",
+            "value": "OK"
+          }
+        ],
+        "total": {
+          "label": "判定",
+          "value": "特典GET！"
+        },
+        "button": "NFT特典を受け取る"
+      },
+      "lines": [
+        {
+          "id": "l15",
+          "speaker": "hero",
+          "text": "判定から特典まで、その場で完了！",
+          "style": "none",
+          "pose": "point",
+          "audio": {
+            "src": "audio/l15-01856309519f66.wav",
+            "durationSec": 2.77,
+            "hash": "01856309519f66"
+          }
+        }
+      ],
+      "characters": [
+        {
+          "id": "buddy",
+          "position": "far-left",
+          "size": "s",
+          "enter": "pop"
+        },
+        {
+          "id": "hero",
+          "position": "far-right",
+          "size": "l",
+          "enter": "slide",
+          "pose": "point"
+        }
+      ]
+    },
+    {
+      "id": "s10",
+      "type": "cta",
+      "transition": "wipe",
+      "logoText": "SUSHI TOP\nOCR",
+      "buttonText": "サービス資料をダウンロード",
+      "contact": "sushitopmarketing.com",
+      "notes": [
+        "※一部の仕組みは特許出願中です",
+        "※画面・キャラクターはイメージです"
+      ],
+      "lines": [
+        {
+          "id": "l16",
+          "speaker": "hero",
+          "text": "SUSHI TOP OCR！",
+          "speak": "スシトップ オーシーアール！",
+          "style": "none",
+          "pose": "wave",
+          "audio": {
+            "src": "audio/l16-079426f3ddd614.wav",
+            "durationSec": 1.6868480725623582,
+            "hash": "079426f3ddd614"
+          }
+        },
+        {
+          "id": "l17",
+          "speaker": "hero",
+          "text": "資料請求、受付中！",
+          "style": "none",
+          "pose": "wave",
+          "audio": {
+            "src": "audio/l17-145e1452138371.wav",
+            "durationSec": 1.5965079365079364,
+            "hash": "145e1452138371"
+          }
+        }
+      ],
+      "characters": [
+        {
+          "id": "hero",
+          "position": "left",
+          "size": "l",
+          "enter": "pop",
+          "pose": "wave"
+        },
+        {
+          "id": "buddy",
+          "position": "far-right",
+          "size": "m",
+          "enter": "pop",
+          "enterDelaySec": 0.2,
+          "pose": "happy"
+        }
+      ]
+    }
+  ]
+}
