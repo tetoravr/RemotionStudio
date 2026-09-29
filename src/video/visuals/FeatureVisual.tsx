@@ -7,6 +7,7 @@ import { CoinRain, ConfettiBurst, Sparkles } from '../components/Particles';
 import type { Box } from '../theme';
 import type { IconName, Visual } from '../schema';
 import { shade, useTheme } from '../theme';
+import { visualTimes } from './timing';
 
 const IconTile: React.FC<{ icon: IconName; size: number; p: number; muted?: boolean; badge?: 'check' | 'x' | null; badgeP?: number }> = ({
   icon,
@@ -82,13 +83,13 @@ const Label: React.FC<{ text: string; dark?: boolean; size: number; p?: number }
   );
 };
 
-export const FeatureVisual: React.FC<{ visual: Visual; box: Box; startAt: number; dark?: boolean }> = ({ visual, box, startAt, dark }) => {
+export const FeatureVisual: React.FC<{ visual: Visual; box: Box; startAt: number; payoffAt?: number; dark?: boolean }> = ({ visual, box, startAt, payoffAt, dark }) => {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
   const theme = useTheme();
   const { colors, layout, project, resolveAsset } = theme;
   const { u } = layout;
-  const t = frame - startAt;
+  const { P, checkStart, runStart, runDur } = visualTimes(visual, startAt, payoffAt ?? startAt + 20);
 
   const wrap = (children: React.ReactNode) => (
     <div style={{ position: 'absolute', left: box.x, top: box.y, width: box.w, height: box.h }}>{children}</div>
@@ -99,9 +100,9 @@ export const FeatureVisual: React.FC<{ visual: Visual; box: Box; startAt: number
       const size = Math.min(box.h * 0.55, box.w * 0.34);
       const pA = pop(frame, fps, startAt, 11, 170);
       const pB = pop(frame, fps, startAt + 5, 11, 170);
-      const line = interpolate(t, [9, 17], [0, 1], { ...clamp, easing: Easing.out(Easing.cubic) });
-      const bolt = pop(frame, fps, startAt + 15, 8, 220);
-      const check = pop(frame, fps, startAt + 20, 9, 220);
+      const line = interpolate(frame, [startAt + 9, Math.max(startAt + 17, P - 2)], [0, 1], { ...clamp, easing: Easing.out(Easing.cubic) });
+      const bolt = pop(frame, fps, P - 4, 8, 220);
+      const check = pop(frame, fps, P + 2, 9, 220);
       const gap = box.w - size * 2;
       return (
         <>
@@ -133,22 +134,21 @@ export const FeatureVisual: React.FC<{ visual: Visual; box: Box; startAt: number
               </div>
             </div>,
           )}
-          {visual.effect === 'coins' ? <CoinRain from={startAt + 18} count={16} area={{ x: box.x - 40 * u, w: box.w + 80 * u }} /> : null}
-          {visual.effect === 'confetti' ? <ConfettiBurst at={startAt + 20} x={box.x + box.w - size / 2} y={box.y + box.h / 2} /> : null}
-          {visual.effect === 'sparkles' ? <Sparkles from={startAt + 18} box={box} count={12} /> : null}
+          {visual.effect === 'coins' ? <CoinRain from={P} count={16} area={{ x: box.x - 40 * u, w: box.w + 80 * u }} /> : null}
+          {visual.effect === 'confetti' ? <ConfettiBurst at={P + 2} x={box.x + box.w - size / 2} y={box.y + box.h / 2} /> : null}
+          {visual.effect === 'sparkles' ? <Sparkles from={P} box={box} count={12} /> : null}
         </>
       );
     }
     case 'stack': {
       const n = visual.count;
       const size = Math.min(box.h * 0.36, box.w * 0.3);
-      const doneAt = 6 + n * 5;
       return wrap(
         <>
           {Array.from({ length: n }).map((_, i) => {
             const land = startAt + i * 5;
             const drop = interpolate(frame, [land, land + 7], [-box.h * 1.2, 0], { ...clamp, easing: Easing.out(Easing.back(1.4)) });
-            const check = pop(frame, fps, startAt + doneAt + i * 3, 9, 240);
+            const check = pop(frame, fps, checkStart + i * 3, 9, 240);
             const y = box.h - size - i * size * 0.34;
             const x = box.w / 2 - size * 0.9 + (i % 2 ? 12 : -12) * u;
             if (frame < land) return null;
@@ -192,7 +192,7 @@ export const FeatureVisual: React.FC<{ visual: Visual; box: Box; startAt: number
               </div>
             );
           })}
-          <Sparkles from={startAt + doneAt + n * 3} box={{ x: box.x, y: box.y, w: box.w, h: box.h }} count={8} />
+          <Sparkles from={checkStart + n * 3} box={{ x: box.x, y: box.y, w: box.w, h: box.h }} count={8} />
         </>,
       );
     }
@@ -202,10 +202,10 @@ export const FeatureVisual: React.FC<{ visual: Visual; box: Box; startAt: number
       const goalSize = Math.min(box.h * 0.42, box.w * 0.26);
       const runner = project.cast.find((c) => c.kind === 'builtin')?.builtin ?? { shape: 'mochi' as const, bodyColor: '#fff', emblem: '', accentColor: undefined };
       const rh = box.h * 0.34;
-      const x = interpolate(t, [4, 26], [box.w * 0.08, box.w - goalSize * 1.3], { ...clamp, easing: Easing.inOut(Easing.quad) });
+      const x = interpolate(frame, [runStart, runStart + runDur], [box.w * 0.08, box.w - goalSize * 1.3], { ...clamp, easing: Easing.inOut(Easing.quad) });
       const jumpP = interpolate(x, [barrierX - box.w * 0.2, barrierX + box.w * 0.2], [0, 1], clamp);
       const y = -Math.sin(jumpP * Math.PI) * box.h * 0.5;
-      const landed = t > 26;
+      const landed = frame > runStart + runDur;
       const gateP = pop(frame, fps, startAt, 12, 160);
       const goalP = pop(frame, fps, startAt + 3, 12, 160);
       return (
@@ -240,7 +240,7 @@ export const FeatureVisual: React.FC<{ visual: Visual; box: Box; startAt: number
                 </div>
               </div>
               <div style={{ position: 'absolute', right: 0, top: roadY - goalSize - 4 * u }}>
-                <IconTile icon={visual.goal} size={goalSize} p={goalP} badge={landed ? 'check' : null} badgeP={pop(frame, fps, startAt + 27, 9, 220)} />
+                <IconTile icon={visual.goal} size={goalSize} p={goalP} badge={landed ? 'check' : null} badgeP={pop(frame, fps, runStart + runDur + 1, 9, 220)} />
               </div>
               <div style={{ position: 'absolute', left: x - rh * 0.45, top: roadY - rh + y + 4 * u, transform: `rotate(${Math.sin(jumpP * Math.PI) * -12}deg)` }}>
                 <Mascot
@@ -257,12 +257,12 @@ export const FeatureVisual: React.FC<{ visual: Visual; box: Box; startAt: number
               </div>
             </>,
           )}
-          <ConfettiBurst at={startAt + 27} x={box.x + box.w - goalSize / 2} y={box.y + roadY - goalSize / 2} count={24} />
+          <ConfettiBurst at={runStart + runDur + 1} x={box.x + box.w - goalSize / 2} y={box.y + roadY - goalSize / 2} count={24} />
         </>
       );
     }
     case 'counter': {
-      const p = interpolate(t, [2, 30], [0, 1], { ...clamp, easing: Easing.out(Easing.cubic) });
+      const p = interpolate(frame, [startAt + 2, Math.max(startAt + 14, P + 6)], [0, 1], { ...clamp, easing: Easing.out(Easing.cubic) });
       const v = visual.from + (visual.to - visual.from) * p;
       const d = visual.decimals ?? 0;
       const num = v.toLocaleString('ja-JP', { minimumFractionDigits: d, maximumFractionDigits: d });
@@ -270,7 +270,7 @@ export const FeatureVisual: React.FC<{ visual: Visual; box: Box; startAt: number
       const ringP = pop(frame, fps, startAt, 12, 150);
       const R = size * 0.44;
       const C = 2 * Math.PI * R;
-      const landed = pop(frame, fps, startAt + 30, 8, 260);
+      const landed = pop(frame, fps, P + 6, 8, 260);
       return wrap(
         <div style={{ position: 'absolute', left: box.w / 2 - size / 2, top: box.h / 2 - size / 2, width: size, height: size, transform: `scale(${Math.max(0, ringP)})` }}>
           <svg width={size} height={size} style={{ position: 'absolute', inset: 0 }}>
@@ -301,7 +301,7 @@ export const FeatureVisual: React.FC<{ visual: Visual; box: Box; startAt: number
             }}
           >
             {visual.caption ? <div style={{ fontWeight: 900, fontSize: size * 0.08, marginBottom: size * 0.01 }}>{visual.caption}</div> : null}
-            <div style={{ fontWeight: 900, lineHeight: 1, whiteSpace: 'nowrap', transform: `scale(${1 + (1 - Math.min(1, landed)) * 0.15 * (t > 30 ? 1 : 0)})` }}>
+            <div style={{ fontWeight: 900, lineHeight: 1, whiteSpace: 'nowrap', transform: `scale(${1 + (1 - Math.min(1, landed)) * 0.15 * (frame > P + 6 ? 1 : 0)})` }}>
               {visual.prefix ? <span style={{ fontSize: size * 0.12 }}>{visual.prefix}</span> : null}
               <span style={{ fontSize: size * 0.26, color: colors.primary, letterSpacing: '-0.02em' }}>{num}</span>
               {visual.suffix ? <span style={{ fontSize: size * 0.12 }}>{visual.suffix}</span> : null}
@@ -316,7 +316,7 @@ export const FeatureVisual: React.FC<{ visual: Visual; box: Box; startAt: number
       return wrap(
         <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'space-evenly' }}>
           {visual.items.map((it, i) => {
-            const p = pop(frame, fps, startAt + i * 5, 10, 180);
+            const p = pop(frame, fps, startAt + i * 5, 10, 180) * (1 + 0.12 * Math.sin(Math.PI * Math.min(1, Math.max(0, (frame - P - i * 2) / 8))));
             return (
               <div key={i} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 20 * u, transform: `translateY(${bob(frame, fps, 6 * u, 1, i)}px)` }}>
                 <IconTile icon={it.icon} size={size} p={p} />
@@ -331,7 +331,7 @@ export const FeatureVisual: React.FC<{ visual: Visual; box: Box; startAt: number
       const size = Math.min(box.h * 0.5, box.w * 0.3);
       const pA = pop(frame, fps, startAt, 11, 170);
       const pArrow = pop(frame, fps, startAt + 7, 11, 200);
-      const pB = pop(frame, fps, startAt + 12, 10, 180);
+      const pB = pop(frame, fps, P, 10, 180);
       return wrap(
         <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 18 * u, width: size * 1.2 }}>
@@ -344,7 +344,7 @@ export const FeatureVisual: React.FC<{ visual: Visual; box: Box; startAt: number
             </svg>
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 18 * u, width: size * 1.2 }}>
-            <IconTile icon={visual.after.icon} size={size} p={pB} badge="check" badgeP={pop(frame, fps, startAt + 18, 9, 220)} />
+            <IconTile icon={visual.after.icon} size={size} p={pB} badge="check" badgeP={pop(frame, fps, P + 6, 9, 220)} />
             <Label text={visual.after.label} dark={dark} size={40 * u} p={Math.min(1, pB)} />
           </div>
         </div>,

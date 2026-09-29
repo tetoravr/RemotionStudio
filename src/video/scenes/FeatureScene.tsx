@@ -105,7 +105,7 @@ export const FeatureScene: React.FC<{ scene: SceneOf<'feature'> }> = ({ scene })
             {scene.footnote}
           </div>
         ) : null}
-        <FeatureVisual visual={scene.visual} box={visualBox} startAt={k.visualAt} dark={dark} />
+        <FeatureVisual visual={scene.visual} box={visualBox} startAt={k.visualAt} payoffAt={k.payoffAt} dark={dark} />
         <SceneCharacters />
         <SceneBubbles />
         <SceneCaptions />

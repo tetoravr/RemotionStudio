@@ -1,6 +1,7 @@
 import type { Project, Scene } from './schema';
 import { stripMarkup, type SceneTiming, type Timeline } from './timeline';
 import { WIPE_CUT } from './components/Transitions';
+import { visualTimes } from './visuals/timing';
 
 export type SfxKind = 'pop' | 'whoosh' | 'impact' | 'ding' | 'coin' | 'sparkle' | 'thud' | 'swish';
 export type SfxEvent = { frame: number; kind: SfxKind; volume?: number };
@@ -27,6 +28,8 @@ export type SceneKeys = {
   eyebrowAt: number;
   headAt: number;
   visualAt: number;
+  /** 図解の「決め」（見出しの叩きつけ） */
+  payoffAt: number;
   propAt: number;
 };
 
@@ -60,8 +63,8 @@ export const sceneKeys = (st: SceneTiming, project: Project): SceneKeys => {
     const second = st.lines[1] ?? st.lines[0];
     propAt = second ? Math.max(enterOffset + 4, second.start - 10) : enterOffset + 10;
   }
-  const visualAt = s.type === 'feature' ? headAt + 4 : s.type === 'showcase' ? enterOffset + 4 : headAt;
-  return { enterOffset, logoAt, eyebrowAt, headAt, visualAt, propAt };
+  const visualAt = s.type === 'feature' ? Math.min(eyebrowAt + 6, headAt) : s.type === 'showcase' ? enterOffset + 4 : headAt;
+  return { enterOffset, logoAt, eyebrowAt, headAt, visualAt, payoffAt: headAt, propAt };
 };
 
 /** 効果音の自動配置 */
@@ -96,23 +99,25 @@ export const collectSfx = (timeline: Timeline, project: Project): SfxEvent[] => 
         at(k.headAt, 'impact', 0.85);
         const v = s.visual;
         const va = k.visualAt;
+        const { P, checkStart, runStart, runDur } = visualTimes(v, va, k.payoffAt);
         if (v.kind === 'flow') {
-          at(va + 15, 'pop', 0.4);
-          at(va + 20, 'ding', 0.6);
-          if (v.effect === 'coins') at(va + 22, 'coin', 0.55);
-          if (v.effect === 'confetti' || v.effect === 'sparkles') at(va + 20, 'sparkle', 0.5);
+          at(va, 'pop', 0.3);
+          at(P - 4, 'pop', 0.4);
+          at(P + 2, 'ding', 0.6);
+          if (v.effect === 'coins') at(P + 3, 'coin', 0.55);
+          if (v.effect === 'confetti' || v.effect === 'sparkles') at(P + 2, 'sparkle', 0.5);
         } else if (v.kind === 'stack') {
           for (let i = 0; i < v.count; i++) at(va + i * 5 + 5, 'thud', 0.25);
-          at(va + 6 + v.count * 5, 'ding', 0.6);
+          at(checkStart, 'ding', 0.6);
         } else if (v.kind === 'jump') {
-          at(va + 10, 'swish', 0.5);
-          at(va + 27, 'ding', 0.6);
+          at(runStart + 6, 'swish', 0.5);
+          at(runStart + runDur + 1, 'ding', 0.6);
         } else if (v.kind === 'counter') {
-          at(va + 30, 'ding', 0.6);
+          at(P + 6, 'ding', 0.6);
         } else if (v.kind === 'icons') {
           v.items.forEach((_, i) => at(va + i * 5, 'pop', 0.35));
         } else if (v.kind === 'compare') {
-          at(va + 18, 'ding', 0.6);
+          at(P + 6, 'ding', 0.6);
         } else if (v.kind === 'image') {
           at(va, 'pop', 0.4);
         }

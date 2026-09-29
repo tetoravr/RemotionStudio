@@ -77,6 +77,7 @@ export const renderProject = ({ project, serverUrl, onProgress, crf = 18 }: Rend
       imageFormat: 'jpeg',
       jpegQuality: 92,
       pixelFormat: 'yuv420p',
+      colorSpace: 'bt709',
       outputLocation,
       browserExecutable: config.browserExecutable,
       onProgress: ({ progress, renderedFrames }) => {

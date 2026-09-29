@@ -15,6 +15,7 @@ const outDir = args.filter((a) => !a.startsWith('--'))[1] ?? 'out/stills';
 const every = Number(args.find((a) => a.startsWith('--every='))?.split('=')[1] ?? 0);
 const format = args.find((a) => a.startsWith('--format='))?.split('=')[1];
 const assetBase = args.find((a) => a.startsWith('--assets='))?.split('=')[1];
+const frameList = args.find((a) => a.startsWith('--frames='))?.split('=')[1];
 
 const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
 if (format) raw.format = format;
@@ -22,7 +23,9 @@ const project = Project.parse(raw);
 const tl = computeTimeline(project);
 
 const frames: number[] = [];
-if (every > 0) {
+if (frameList) {
+  frames.push(...frameList.split(',').map(Number));
+} else if (every > 0) {
   for (let f = 0; f < tl.total; f += Math.round(every * project.fps)) frames.push(f);
 } else {
   for (const st of tl.scenes) frames.push(st.start + Math.min(st.duration - 1, Math.round(st.duration * 0.7)));
