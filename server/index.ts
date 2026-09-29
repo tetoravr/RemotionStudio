@@ -277,7 +277,7 @@ app.use((err: Error & { status?: number }, _req: Request, res: Response, _next: 
 });
 
 await seedSamples();
-app.listen(config.port, () => {
+app.listen(config.port, config.host, () => {
   console.log(`\n  Ad Studio server: http://localhost:${config.port}`);
   console.log(`  OpenAI: ${hasOpenAI() ? `有効 (${config.models.text} / ${config.models.tts} / ${config.models.image})` : '未設定（.env に OPENAI_API_KEY を設定すると AI 機能が使えます）'}\n`);
 });

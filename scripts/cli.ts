@@ -39,7 +39,7 @@ const bar = (p: number, msg: string) => {
 const withFileServer = async <T,>(fn: (url: string) => Promise<T>) => {
   const app = express();
   app.use('/files', express.static(config.projectsDir));
-  const server = app.listen(0);
+  const server = app.listen(0, '127.0.0.1');
   await new Promise((r) => server.once('listening', r));
   const { port } = server.address() as AddressInfo;
   try {

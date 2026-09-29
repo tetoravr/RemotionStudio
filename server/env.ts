@@ -5,6 +5,8 @@ export const ROOT = path.resolve(import.meta.dirname, '..');
 
 export const config = {
   port: Number(process.env.PORT || 3210),
+  /** 既定はローカルのみ。LAN に公開する場合は HOST=0.0.0.0 */
+  host: process.env.HOST || '127.0.0.1',
   projectsDir: path.resolve(ROOT, process.env.PROJECTS_DIR || 'projects'),
   publicDir: path.resolve(ROOT, 'public'),
   openaiKey: process.env.OPENAI_API_KEY || '',
