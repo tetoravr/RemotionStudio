@@ -1,0 +1,33 @@
+{
+  "id": "osushi-chan",
+  "name": "おすしちゃん",
+  "kind": "creature",
+  "persona": "サーモンのにぎり寿司のマスコット。卒業帽をかぶった好奇心旺盛な聞き役で、視聴者の疑問や本音を代弁する",
+  "voice": {
+    "voice": "shimmer",
+    "instructions": "小さくてかわいいマスコットキャラクターの声。幼く無邪気で、少し高め。ゆっくりめに、語尾をやさしく伸ばす。驚いた時は素直に大きく反応する。",
+    "speed": 1
+  },
+  "images": {
+    "default": "default.webp",
+    "happy": "happy.webp",
+    "think": "think.webp",
+    "surprised": "surprised.webp",
+    "sad": "sad.webp",
+    "wink": "wink.webp"
+  },
+  "imagesOpen": {
+    "sad": "sad-open.webp",
+    "happy": "happy-open.webp",
+    "surprised": "surprised-open.webp",
+    "default": "default-open.webp",
+    "think": "think-open.webp",
+    "wink": "wink-open.webp"
+  },
+  "crop": {
+    "left": 67,
+    "top": 111,
+    "right": 955,
+    "bottom": 865
+  }
+}

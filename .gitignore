@@ -1,0 +1,10 @@
+node_modules/
+dist/
+out/
+.scratch/
+.env
+.env.*
+!.env.example
+/projects/
+*.log
+.DS_Store

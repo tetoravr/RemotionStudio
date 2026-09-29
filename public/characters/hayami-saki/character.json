@@ -1,0 +1,37 @@
+{
+  "id": "hayami-saki",
+  "name": "速水さき",
+  "kind": "human",
+  "persona": "20代後半の明るく親しみやすい案内役。サービスの価値を分かりやすく説明する。スマホを片手に持っていることが多い",
+  "voice": {
+    "voice": "marin",
+    "instructions": "20代後半の日本人女性。明るく親しみやすい、自然な話し方。CMのナレーターのように張りすぎず、友達に説明するようなやわらかいトーンで。語尾は自然に下げ、句読点でしっかり間をとる。",
+    "speed": 1.05
+  },
+  "images": {
+    "default": "default.webp",
+    "surprised": "surprised.webp",
+    "sad": "sad.webp",
+    "think": "think.webp",
+    "happy": "happy.webp",
+    "wave": "wave.webp",
+    "point": "point.webp",
+    "wink": "wink.webp"
+  },
+  "imagesOpen": {
+    "sad": "sad-open.webp",
+    "default": "default-open.webp",
+    "happy": "happy-open.webp",
+    "surprised": "surprised-open.webp",
+    "wave": "wave-open.webp",
+    "think": "think-open.webp",
+    "wink": "wink-open.webp",
+    "point": "point-open.webp"
+  },
+  "crop": {
+    "left": 260,
+    "top": 10,
+    "right": 886,
+    "bottom": 1520
+  }
+}
