@@ -88,8 +88,9 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
     pending.current = null;
     if (p) {
       setSaveState('saving');
-      saving.current = api
-        .save(p)
+      // 保存は直列に（古い内容が新しい内容を上書きしないように）
+      saving.current = saving.current
+        .then(() => api.save(p))
         .then(() => setSaveState(pending.current ? 'dirty' : 'saved'))
         .catch(() => setSaveState('error'));
     }
