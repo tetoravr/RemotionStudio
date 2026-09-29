@@ -13,6 +13,7 @@
     "studio": "remotion studio src/video/index.ts",
     "make": "tsx scripts/cli.ts make",
     "render": "tsx scripts/cli.ts render",
+    "irodori": "bash scripts/start-irodori.sh",
     "audio:build": "tsx scripts/generate-audio.ts",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test tests/*.test.ts"

@@ -8,3 +8,4 @@ out/
 /projects/
 *.log
 .DS_Store
+.irodori/

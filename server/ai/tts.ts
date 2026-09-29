@@ -2,8 +2,8 @@ import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { narrationHash } from '../../src/video/narrationKey';
-import type { CastMember, Line } from '../../src/video/schema';
+import { irodoriCaption, narrationHash, type TtsProvider } from '../../src/video/narrationKey';
+import type { AudioSettings, CastMember, Line } from '../../src/video/schema';
 import { config } from '../env';
 import { runFfmpeg, wavDurationSec } from '../ffmpeg';
 import { getOpenAI } from './client';
@@ -26,7 +26,53 @@ export const OPENAI_VOICES = [
 
 export { NARRATOR_VOICE, speechText, voiceFor } from '../../src/video/narrationKey';
 
-export const lineHash = (line: Line, voice: CastMember['voice']) => narrationHash(line, voice, config.models.tts);
+export type { TtsProvider };
+
+const IRODORI_FALLBACK_URL = 'http://127.0.0.1:8088';
+
+/** プロジェクト設定（auto / openai / irodori）から実際に使うエンジンを決める */
+export const resolveProvider = (setting: AudioSettings['ttsProvider'] = 'auto'): TtsProvider => {
+  const pick = setting !== 'auto' ? setting : config.tts.provider;
+  if (pick === 'openai' || pick === 'irodori') return pick;
+  return config.tts.irodoriUrl ? 'irodori' : 'openai';
+};
+
+/** 音声の同一性キーに入れるエンジン ID */
+export const engineId = (provider: TtsProvider) => (provider === 'irodori' ? `irodori:${config.tts.irodoriModel}` : config.models.tts);
+
+export const lineHash = (line: Line, voice: CastMember['voice'], provider: TtsProvider) => narrationHash(line, voice, engineId(provider));
+
+const irodoriBase = () => config.tts.irodoriUrl || IRODORI_FALLBACK_URL;
+const irodoriHeaders = (): Record<string, string> => ({
+  'Content-Type': 'application/json',
+  ...(config.tts.irodoriKey ? { Authorization: `Bearer ${config.tts.irodoriKey}` } : {}),
+});
+
+export type IrodoriStatus = { online: boolean; url: string; checkpoint?: string; device?: string; voices: string[]; error?: string };
+
+/** Irodori-TTS サーバーの状態（エディターの表示用） */
+export const irodoriStatus = async (): Promise<IrodoriStatus> => {
+  const url = irodoriBase();
+  try {
+    const health = (await (await fetch(`${url}/health`, { headers: irodoriHeaders(), signal: AbortSignal.timeout(2500) })).json()) as {
+      model?: { hf_checkpoint?: string; model_device?: string };
+    };
+    let voices: string[] = [];
+    try {
+      const v = (await (await fetch(`${url}/v1/audio/voices`, { headers: irodoriHeaders(), signal: AbortSignal.timeout(2500) })).json()) as {
+        data?: { id?: string; name?: string }[];
+        voices?: (string | { id?: string; name?: string })[];
+      };
+      const list = v.data ?? v.voices ?? [];
+      voices = list.map((x) => (typeof x === 'string' ? x : x.id ?? x.name ?? '')).filter((x) => x && x !== 'none');
+    } catch {
+      /* 参照音声の一覧は無くても動く */
+    }
+    return { online: true, url, checkpoint: health.model?.hf_checkpoint, device: health.model?.model_device, voices };
+  } catch (e) {
+    return { online: false, url, voices: [], error: (e as Error).message };
+  }
+};
 
 const TTS_RATE = 24000; // OpenAI の pcm 出力は 24kHz / 16bit / mono
 
@@ -34,8 +80,8 @@ const TTS_RATE = 24000; // OpenAI の pcm 出力は 24kHz / 16bit / mono
  * 前後の無音だけを軽く切り、音量を揃える。
  * 息継ぎや語尾の余韻は自然さに効くので、削りすぎない（先頭 80ms / 末尾 140ms の余白を残す）。
  */
-export const trimAndNormalize = (pcm: Int16Array, rate = TTS_RATE) => {
-  const f = Float32Array.from(pcm, (v) => v / 32768);
+export const trimAndNormalize = (input: Int16Array | Float32Array, rate = TTS_RATE) => {
+  const f = input instanceof Int16Array ? Float32Array.from(input, (v) => v / 32768) : Float32Array.from(input);
   const thr = 0.004;
   const win = Math.round(rate * 0.01);
   const loud = (i: number) => {
@@ -90,18 +136,42 @@ export const encodeWav = (samples: Float32Array, rate: number) => {
   return buf;
 };
 
-/** WAV(16bit mono) の PCM を取り出す */
+/** WAV（PCM 16/24/32bit・float32・多チャンネル）を、モノラルの Float32 にして取り出す */
 export const readWavSamples = (buf: Buffer): { samples: Float32Array; rate: number } => {
   let offset = 12;
   let rate = 44100;
+  let format = 1;
+  let channels = 1;
+  let bits = 16;
   while (offset + 8 <= buf.length) {
     const id = buf.toString('ascii', offset, offset + 4);
     const size = buf.readUInt32LE(offset + 4);
-    if (id === 'fmt ') rate = buf.readUInt32LE(offset + 12);
+    if (id === 'fmt ') {
+      format = buf.readUInt16LE(offset + 8);
+      channels = Math.max(1, buf.readUInt16LE(offset + 10));
+      rate = buf.readUInt32LE(offset + 12);
+      bits = buf.readUInt16LE(offset + 22);
+      if (format === 0xfffe && size >= 26) format = buf.readUInt16LE(offset + 32); // WAVE_FORMAT_EXTENSIBLE
+    }
     if (id === 'data') {
-      const n = Math.floor(Math.min(size, buf.length - offset - 8) / 2);
-      const samples = new Float32Array(n);
-      for (let i = 0; i < n; i++) samples[i] = buf.readInt16LE(offset + 8 + i * 2) / 32768;
+      const bytes = bits / 8;
+      const avail = Math.min(size >>> 0, buf.length - offset - 8);
+      const frames = Math.floor(avail / (bytes * channels));
+      const at = (i: number) => {
+        const o = offset + 8 + i * bytes;
+        if (format === 3) return bits === 64 ? buf.readDoubleLE(o) : buf.readFloatLE(o);
+        if (bits === 16) return buf.readInt16LE(o) / 32768;
+        if (bits === 24) return buf.readIntLE(o, 3) / 8388608;
+        if (bits === 32) return buf.readInt32LE(o) / 2147483648;
+        if (bits === 8) return (buf.readUInt8(o) - 128) / 128;
+        throw new Error(`unsupported wav: ${bits}bit`);
+      };
+      const samples = new Float32Array(frames);
+      for (let f = 0; f < frames; f++) {
+        let sum = 0;
+        for (let c = 0; c < channels; c++) sum += at(f * channels + c);
+        samples[f] = sum / channels;
+      }
       return { samples, rate };
     }
     offset += 8 + size + (size % 2);
@@ -139,12 +209,16 @@ export const mouthEnvelope = (samples: Float32Array, rate: number, hz = 30): num
   return raw;
 };
 
-/**
- * OpenAI TTS で音声を作り、前後の無音を軽く整えて WAV で保存する。
- * @param delivery セリフごとの演技指示（例: 「驚いて」）。キャラの声の指示に追記される
- */
-export const synthesizeToFile = async (text: string, voice: CastMember['voice'], out: string, delivery?: string) => {
-  const outFile = path.resolve(out);
+export type SynthOptions = {
+  /** セリフごとの演技指示（例: 「驚いて」） */
+  delivery?: string;
+  /** Irodori-TTS の感情絵文字（セリフの前に付けて読み上げる） */
+  emoji?: string;
+  provider?: TtsProvider;
+};
+
+/** OpenAI TTS: 24kHz の PCM */
+const synthOpenAI = async (text: string, voice: CastMember['voice'], delivery?: string) => {
   const client = getOpenAI();
   const instructions = [voice.instructions, delivery ? `このセリフは「${delivery}」という気持ちで読む。` : ''].filter(Boolean).join('\n');
   const res = await client.audio.speech.create({
@@ -156,23 +230,69 @@ export const synthesizeToFile = async (text: string, voice: CastMember['voice'],
   });
   const raw = Buffer.from(await res.arrayBuffer());
   const even = raw.subarray(0, raw.length - (raw.length % 2));
-  const pcm = new Int16Array(even.buffer.slice(even.byteOffset, even.byteOffset + even.length));
-  const cleaned = trimAndNormalize(pcm);
-  const speed = Math.min(2, Math.max(0.5, voice.speed || 1));
+  return { samples: new Int16Array(even.buffer.slice(even.byteOffset, even.byteOffset + even.length)), rate: TTS_RATE };
+};
+
+/** Irodori-TTS（OpenAI 互換サーバー）: 48kHz の WAV。声はキャプション（声のデザイン）＋固定シード、または参照音声で決める */
+const synthIrodori = async (text: string, voice: CastMember['voice'], opts: SynthOptions) => {
+  const caption = irodoriCaption(voice, opts.delivery);
+  const irodori: Record<string, unknown> = {};
+  if (caption) irodori.caption = caption;
+  if (voice.seed != null) irodori.seed = voice.seed;
+  if (config.tts.irodoriSteps) irodori.num_steps = config.tts.irodoriSteps;
+  // 話速はモデル自身に任せる（時間を伸縮するより自然）。1 より小さいほど速く話す
+  const speed = voice.speed || 1;
+  if (Math.abs(speed - 1) >= 0.03) irodori.duration_scale = Math.min(1.5, Math.max(0.5, 1 / speed));
+  let res: Response;
+  try {
+    res = await fetch(`${irodoriBase()}/v1/audio/speech`, {
+      method: 'POST',
+      headers: irodoriHeaders(),
+      body: JSON.stringify({
+        model: config.tts.irodoriModel,
+        input: `${opts.emoji ?? ''}${text}`,
+        voice: voice.refVoice || 'none',
+        response_format: 'wav',
+        irodori,
+      }),
+      signal: AbortSignal.timeout(config.tts.irodoriTimeoutMs),
+    });
+  } catch (e) {
+    throw new Error(
+      `Irodori-TTS サーバーに接続できません（${irodoriBase()}）。scripts/start-irodori.sh で起動してください。\n${(e as Error).message}`,
+    );
+  }
+  if (!res.ok) throw new Error(`Irodori-TTS がエラーを返しました (${res.status}): ${(await res.text()).slice(0, 300)}`);
+  const { samples, rate } = readWavSamples(Buffer.from(await res.arrayBuffer()));
+  return { samples, rate };
+};
+
+/**
+ * 音声を作り、前後の無音を軽く整えて WAV で保存する。
+ * provider は resolveProvider(project.audio.ttsProvider) の結果を渡す（省略時は環境設定に従う）
+ */
+export const synthesizeToFile = async (text: string, voice: CastMember['voice'], out: string, opts: SynthOptions = {}) => {
+  const outFile = path.resolve(out);
+  const provider = opts.provider ?? resolveProvider();
+  const { samples: raw, rate } = provider === 'irodori' ? await synthIrodori(text, voice, opts) : await synthOpenAI(text, voice, opts.delivery);
+  if (!raw.length) throw new Error('音声が空でした');
+  const cleaned = trimAndNormalize(raw, rate);
+  // Irodori-TTS は生成時に話速を反映済み。OpenAI TTS だけ後から伸縮する
+  const speed = provider === 'irodori' ? 1 : Math.min(2, Math.max(0.5, voice.speed || 1));
   await fs.mkdir(path.dirname(outFile), { recursive: true });
   if (Math.abs(speed - 1) < 0.03) {
-    await fs.writeFile(outFile, encodeWav(cleaned, TTS_RATE));
+    await fs.writeFile(outFile, encodeWav(cleaned, rate));
   } else {
     // わずかな話速調整のみ（1.1倍まで推奨。それ以上は不自然になりやすい）
     const tmp = path.join(os.tmpdir(), `tts-${crypto.randomUUID()}.wav`);
-    await fs.writeFile(tmp, encodeWav(cleaned, TTS_RATE));
+    await fs.writeFile(tmp, encodeWav(cleaned, rate));
     try {
-      await runFfmpeg(['-i', tmp, '-af', `atempo=${speed.toFixed(3)}`, '-ar', '44100', '-ac', '1', '-c:a', 'pcm_s16le', outFile]);
+      await runFfmpeg(['-i', tmp, '-af', `atempo=${speed.toFixed(3)}`, '-ar', String(Math.min(rate, 48000)), '-ac', '1', '-c:a', 'pcm_s16le', outFile]);
     } finally {
       await fs.rm(tmp, { force: true });
     }
   }
   const wav = await fs.readFile(outFile);
-  const { samples, rate } = readWavSamples(wav);
-  return { durationSec: wavDurationSec(wav), mouth: mouthEnvelope(samples, rate) };
+  const parsed = readWavSamples(wav);
+  return { durationSec: wavDurationSec(wav), mouth: mouthEnvelope(parsed.samples, parsed.rate) };
 };

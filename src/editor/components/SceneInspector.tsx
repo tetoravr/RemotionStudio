@@ -1,5 +1,6 @@
 import React, { useContext, useRef } from 'react';
 import { ICON_LABELS } from '../../video/components/Icon';
+import { IRODORI_EMOJI } from '../../video/emotions';
 import { isAudioStale } from '../../video/narrationKey';
 import {
   BACKGROUNDS, ICON_NAMES, POSES, TRANSITIONS,
@@ -7,7 +8,7 @@ import {
 } from '../../video/schema';
 import { SCENE_TYPE_LABELS } from '../../video/templates';
 import type { SceneTiming } from '../../video/timeline';
-import { api } from '../api';
+import { api, ttsFor } from '../api';
 import { assetUrl } from './CastPanel';
 import { MetaContext } from '../App';
 import type { Update } from '../pages/Editor';
@@ -180,7 +181,7 @@ const LinesEditor: React.FC<{ project: Project; index: number; update: Update; t
         上から順に喋ります。表示「なし」は声だけ（特徴シーンで見出しと同じ文を読む時など）
       </div>
       {scene.lines.map((l, li) => {
-        const stale = isAudioStale(l, project.cast, meta.models.tts);
+        const stale = isAudioStale(l, project.cast, ttsFor(meta, project.audio.ttsProvider).engine);
         const lt = timing?.lines[li];
         return (
           <div className="sub" key={l.id}>
@@ -235,6 +236,21 @@ const LinesEditor: React.FC<{ project: Project; index: number; update: Update; t
                 <Select value={l.pose ?? ''} onChange={(v) => setLine(li, { pose: (v || undefined) as Line['pose'] })} options={[{ value: '', label: '変えない' }, ...POSES.map((p) => ({ value: p, label: POSE_LABELS[p] }))]} />
               </Field>
             </div>
+            {ttsFor(meta, project.audio.ttsProvider).provider === 'irodori' ? (
+              <Field label="感情（Irodori-TTS）" hint="セリフの前に付く絵文字で、声の調子が変わります。効き方は文脈によって変わります">
+                <div className="chips">
+                  <button className={`chip ${!l.emoji ? 'on' : ''}`} onClick={() => setLine(li, { emoji: undefined })}>
+                    なし
+                  </button>
+                  {IRODORI_EMOJI.map((e) => (
+                    <button key={e.emoji} className={`chip ${l.emoji === e.emoji ? 'on' : ''}`} title={e.label} onClick={() => setLine(li, { emoji: e.emoji })}>
+                      {e.emoji}
+                      <span className="faint">{e.label}</span>
+                    </button>
+                  ))}
+                </div>
+              </Field>
+            ) : null}
             <Field label="演技指示（任意）" hint="声の感情。例: 驚いて／困って小声で／ワクワクして。棒読み対策に効果的です">
               <Text value={l.delivery} onChange={(v) => setLine(li, { delivery: v || undefined })} />
             </Field>

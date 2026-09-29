@@ -30,6 +30,8 @@ export const LIBRARY_CHARACTERS: Record<string, LibraryCharacter> = {
       instructions:
         '20代後半の日本人女性。明るく親しみやすい、自然な話し方。CMのナレーターのように張りすぎず、友達に説明するようなやわらかいトーンで。文の終わりは自然に下げ、読点でしっかり間をとる。',
       speed: 1.0,
+      caption: '20代前半の日本人女性の声。明るく元気で親しみやすい。はっきり聞き取りやすく、テンポよく自然に話す。',
+      seed: 42,
     },
   },
   'osushi-chan': {
@@ -43,6 +45,8 @@ export const LIBRARY_CHARACTERS: Record<string, LibraryCharacter> = {
       instructions:
         '小さくてかわいいマスコットキャラクターの声。幼く無邪気で、高めの声。ゆっくりめで、語尾をやさしく伸ばす。驚いた時は素直に大きく反応し、悲しい時は小さな声になる。',
       speed: 1.0,
+      caption: '小さくてかわいいマスコットの声。幼くて無邪気な、高めの声。のんびりゆっくり話し、語尾をやさしく伸ばす。',
+      seed: 7,
     },
   },
 };

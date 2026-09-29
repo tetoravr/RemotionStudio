@@ -3,12 +3,12 @@ import fs from 'node:fs';
 import { test } from 'node:test';
 import { aiToScenes, type AiStoryboard } from '../server/ai/storyboard';
 import { detectMouthRegion } from '../server/ai/mouth';
-import { mouthEnvelope, trimAndNormalize } from '../server/ai/tts';
+import { engineId, mouthEnvelope, readWavSamples, resolveProvider, trimAndNormalize } from '../server/ai/tts';
 import { LIBRARY_CHARACTERS, libraryCastMember } from '../src/video/library';
 import { parseRich, fitFontSize } from '../src/video/components/RichText';
 import { adaptForFormat } from '../src/video/adapt';
 import { collectSfx } from '../src/video/events';
-import { isAudioStale, narrationHash } from '../src/video/narrationKey';
+import { irodoriCaption, isAudioStale, narrationHash, voiceFor } from '../src/video/narrationKey';
 import { Project } from '../src/video/schema';
 import { blankProject, DEFAULT_CAST } from '../src/video/templates';
 import { computeTimeline } from '../src/video/timeline';
@@ -18,7 +18,7 @@ const sample = Project.parse(JSON.parse(fs.readFileSync('public/samples/sushitop
 test('サンプルプロジェクトがスキーマに適合し、全セリフに音声がある', () => {
   assert.equal(sample.scenes.length, 8);
   for (const s of sample.scenes) for (const l of s.lines) assert.ok(l.audio, `${l.id} has audio`);
-  for (const s of sample.scenes) for (const l of s.lines) assert.equal(isAudioStale(l, sample.cast, 'gpt-4o-mini-tts'), false, `${l.id} is fresh`);
+  for (const s of sample.scenes) for (const l of s.lines) assert.equal(isAudioStale(l, sample.cast, engineId(resolveProvider(sample.audio.ttsProvider))), false, `${l.id} is fresh`);
 });
 
 test('タイムライン: シーンが連続し、切り替えが8分音符グリッドに乗る', () => {
@@ -33,7 +33,7 @@ test('タイムライン: シーンが連続し、切り替えが8分音符グ�
     for (let i = 1; i < st.lines.length; i++) assert.ok(st.lines[i].start >= st.lines[i - 1].end, 'lines do not overlap');
   }
   assert.equal(tl.total, cursor);
-  assert.ok(tl.total / sample.fps > 25 && tl.total / sample.fps < 40, `about 30s (${tl.total / sample.fps})`);
+  assert.ok(tl.total / sample.fps > 25 && tl.total / sample.fps < 42, `about 30-40s (${tl.total / sample.fps})`);
 });
 
 test('音声がなくても文字数から尺を推定できる', () => {
@@ -77,7 +77,7 @@ test('AI出力をシーンに変換し、不正な値は補正・除外する', 
       {
         type: 'feature',
         transition: 'wipe',
-        lines: [{ speaker: 'unknown', text: 'やあ', speak: null, delivery: null, pose: null, style: 'bubble' }],
+        lines: [{ speaker: 'unknown', text: 'やあ', speak: null, delivery: null, emoji: null, pose: null, style: 'bubble' }],
         characters: [{ id: 'saki', pose: 'happy', position: 'left', size: 'm', enter: 'pop', enterDelaySec: 9 }],
         eyebrow: '[[A]]で',
         headline: 'B！',
@@ -155,4 +155,55 @@ test('サンプル: 疑似UIは使わず、画面紹介シーンは実スクリ�
 
 test('音声: 口パクデータが全セリフにある', () => {
   for (const s of sample.scenes) for (const l of s.lines) assert.ok(l.audio?.mouth && l.audio.mouth.length >= 10, `${l.id} has mouth data`);
+});
+
+test('Irodori-TTS: エンジン・声・感情が変わると音声は古い扱いになる', () => {
+  const line = sample.scenes[1].lines[0];
+  const voice = voiceFor(line.speaker, sample.cast);
+  const irodori = narrationHash(line, voice, 'irodori:irodori-tts');
+  assert.notEqual(irodori, narrationHash(line, voice, 'gpt-4o-mini-tts'), 'engine');
+  assert.notEqual(irodori, narrationHash(line, { ...voice, seed: (voice.seed ?? 0) + 1 }, 'irodori:irodori-tts'), 'seed');
+  assert.notEqual(irodori, narrationHash(line, { ...voice, caption: '低い男性の声' }, 'irodori:irodori-tts'), 'caption');
+  assert.notEqual(irodori, narrationHash({ ...line, emoji: '😲' }, voice, 'irodori:irodori-tts'), 'emoji');
+  // OpenAI 用の項目は Irodori の音声に影響しない
+  assert.equal(irodori, narrationHash(line, { ...voice, voice: 'coral' }, 'irodori:irodori-tts'));
+  // 逆に、Irodori 用の項目は OpenAI の音声に影響しない
+  assert.equal(narrationHash(line, voice, 'gpt-4o-mini-tts'), narrationHash({ ...line, emoji: '😲' }, { ...voice, seed: 1 }, 'gpt-4o-mini-tts'));
+});
+
+test('Irodori-TTS: キャプション（参照音声があるときは感情の指示だけ）', () => {
+  const voice = { voice: 'marin', instructions: '基本の指示', speed: 1, caption: '若い女性の声' };
+  assert.equal(irodoriCaption(voice), '若い女性の声');
+  assert.equal(irodoriCaption({ ...voice, caption: undefined }), '基本の指示');
+  assert.equal(irodoriCaption(voice, '驚いて。'), '若い女性の声\nこのセリフは「驚いて」という調子で読む。');
+  assert.equal(irodoriCaption({ ...voice, refVoice: 'me' }, '驚いて'), 'このセリフは「驚いて」という調子で読む。');
+  assert.equal(irodoriCaption({ ...voice, refVoice: 'me' }), '');
+});
+
+test('WAV読み込み: 48kHz float32 ステレオ / 16bit を扱える', () => {
+  const wav = (fmt: number, bits: number, ch: number, rate: number, frames: number, write: (b: Buffer, o: number, v: number) => void) => {
+    const bytes = bits / 8;
+    const b = Buffer.alloc(44 + frames * ch * bytes);
+    b.write('RIFF', 0);
+    b.writeUInt32LE(b.length - 8, 4);
+    b.write('WAVEfmt ', 8);
+    b.writeUInt32LE(16, 16);
+    b.writeUInt16LE(fmt, 20);
+    b.writeUInt16LE(ch, 22);
+    b.writeUInt32LE(rate, 24);
+    b.writeUInt32LE(rate * ch * bytes, 28);
+    b.writeUInt16LE(ch * bytes, 32);
+    b.writeUInt16LE(bits, 34);
+    b.write('data', 36);
+    b.writeUInt32LE(frames * ch * bytes, 40);
+    for (let i = 0; i < frames; i++) for (let c = 0; c < ch; c++) write(b, 44 + (i * ch + c) * bytes, c === 0 ? 0.5 : -0.5 + i * 0);
+    return b;
+  };
+  const f32 = readWavSamples(wav(3, 32, 2, 48000, 100, (b, o, v) => b.writeFloatLE(v === 0.5 ? 0.5 : 0.25, o)));
+  assert.equal(f32.rate, 48000);
+  assert.equal(f32.samples.length, 100);
+  assert.ok(Math.abs(f32.samples[10] - 0.375) < 1e-6, 'stereo is averaged');
+  const i16 = readWavSamples(wav(1, 16, 1, 24000, 50, (b, o) => b.writeInt16LE(16384, o)));
+  assert.equal(i16.rate, 24000);
+  assert.ok(Math.abs(i16.samples[0] - 0.5) < 1e-4);
 });

@@ -1,13 +1,25 @@
+import type { TtsProvider } from '../video/narrationKey';
 import type { Project } from '../video/schema';
 
 export type Meta = {
   openai: boolean;
   models: { text: string; tts: string; image: string };
+  tts: {
+    default: TtsProvider;
+    engines: Record<TtsProvider, string>;
+    irodori: { online: boolean; url: string; checkpoint?: string; device?: string; voices: string[]; error?: string };
+  };
   voices: { id: string; label: string }[];
   icons: string[];
   poses: string[];
   styles: string[];
   library: { id: string; name: string; kind: 'human' | 'creature' }[];
+};
+
+/** プロジェクトの設定（auto 含む）から、実際に使う音声エンジンと ID を決める */
+export const ttsFor = (meta: Meta, setting: Project['audio']['ttsProvider']) => {
+  const provider: TtsProvider = setting === 'auto' ? meta.tts.default : setting;
+  return { provider, engine: meta.tts.engines[provider], ready: provider === 'irodori' ? meta.tts.irodori.online : meta.openai };
 };
 
 export type ProjectSummary = {
@@ -62,8 +74,8 @@ export const api = {
   post: (url: string, body: unknown = {}) =>
     fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then((r) => json<{ jobId: string }>(r)),
   job: (id: string) => fetch(`/api/jobs/${id}`).then((r) => json<Job>(r)),
-  ttsPreview: async (text: string, voice: Project['cast'][number]['voice'], delivery?: string) => {
-    const r = await fetch('/api/tts/preview', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, voice, delivery }) });
+  ttsPreview: async (text: string, voice: Project['cast'][number]['voice'], opts: { delivery?: string; emoji?: string; provider?: TtsProvider } = {}) => {
+    const r = await fetch('/api/tts/preview', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, voice, ...opts }) });
     if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || '試聴に失敗しました');
     return URL.createObjectURL(await r.blob());
   },

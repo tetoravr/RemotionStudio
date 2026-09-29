@@ -5,7 +5,7 @@ import { isAudioStale } from '../../video/narrationKey';
 import { FORMATS, Project, type Scene, type SceneType } from '../../video/schema';
 import { newScene, remapCast, SCENE_TYPE_LABELS } from '../../video/templates';
 import { computeTimeline } from '../../video/timeline';
-import { api, waitJob, type Job } from '../api';
+import { api, ttsFor, waitJob, type Job } from '../api';
 import { go, MetaContext } from '../App';
 import { Progress, Seg } from '../components/Fields';
 import { AudioPanel } from '../components/AudioPanel';
@@ -205,8 +205,8 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
   }, [project?.id, size.w]);
 
   const staleCount = useMemo(
-    () => (project ? project.scenes.reduce((a, s) => a + s.lines.filter((l) => isAudioStale(l, project.cast, meta.models.tts)).length, 0) : 0),
-    [project, meta.models.tts],
+    () => (project ? project.scenes.reduce((a, s) => a + s.lines.filter((l) => isAudioStale(l, project.cast, ttsFor(meta, project.audio.ttsProvider).engine)).length, 0) : 0),
+    [project, meta],
   );
 
   /** 実スクリーンショット未設定の画面紹介シーン（番号）。書き出し前に必須 */
@@ -285,9 +285,9 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
         </button>
         <button
           className="btn"
-          disabled={!meta.openai || staleCount === 0 || !project.audio.narration}
+          disabled={!ttsFor(meta, project.audio.ttsProvider).ready || staleCount === 0 || !project.audio.narration}
           onClick={() => runJob('ナレーションを生成しています', `/api/projects/${project.id}/narration`)}
-          title={staleCount ? '変更されたセリフの音声を作成します' : 'すべてのセリフに音声があります'}
+          title={!ttsFor(meta, project.audio.ttsProvider).ready ? '音声エンジンが使えません（「音・設定」タブを確認）' : staleCount ? '変更されたセリフの音声を作成します' : 'すべてのセリフに音声があります'}
         >
           🎙 ナレーション生成 {staleCount ? <span className="count">{staleCount}</span> : null}
         </button>
@@ -324,7 +324,7 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
           <div className="scene-list">
             {project.scenes.map((s, i) => {
               const st = timeline.scenes[i];
-              const stale = s.lines.some((l) => isAudioStale(l, project.cast, meta.models.tts));
+              const stale = s.lines.some((l) => isAudioStale(l, project.cast, ttsFor(meta, project.audio.ttsProvider).engine));
               return (
                 <div key={s.id} className={`scene-item ${i === sel ? 'on' : ''}`} onClick={() => selectScene(i)}>
                   <div className="num">{i + 1}</div>

@@ -18,6 +18,7 @@ import sharp from 'sharp';
 import { attachScreenshots, generateStoryboard, type Brief, type ScreenshotRef } from '../server/ai/storyboard';
 import { generateCharacter } from '../server/characters';
 import { config, hasOpenAI } from '../server/env';
+import { resolveProvider } from '../server/ai/tts';
 import { generateNarration } from '../server/narration';
 import { loadProject, newProjectId, projectDir, saveAsset, saveProject, seedSamples } from '../server/projects';
 import { renderProject } from '../server/render';
@@ -112,8 +113,13 @@ const make = async () => {
     console.log(`\n✔ キャラ画像 ${Object.keys(r.images).length}枚${r.failures.length ? `（失敗 ${r.failures.length}）` : ''}`);
   }
 
+  if (flags.tts === 'openai' || flags.tts === 'irodori') {
+    project.audio.ttsProvider = flags.tts;
+    project = await saveProject(project);
+  }
+
   if (flags['no-voice'] !== 'true') {
-    console.log('\n▶ ナレーション生成中…');
+    console.log(`\n▶ ナレーション生成中…（${resolveProvider(project.audio.ttsProvider) === 'irodori' ? 'Irodori-TTS' : 'OpenAI TTS'}）`);
     await generateNarration(project, projectDir(project.id), { onProgress: (d, t, m) => bar(t ? d / t : 1, m) });
     project = await saveProject(project);
     console.log('\n✔ ナレーション完了');

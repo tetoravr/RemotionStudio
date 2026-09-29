@@ -60,6 +60,8 @@ export const Line = z.object({
   pose: Pose.optional(),
   /** 演技指示（声のトーン）。例: 「驚いて」「落ち込んで小声で」「元気よく」 */
   delivery: z.string().optional(),
+  /** Irodori-TTS 用の感情・非言語の絵文字（セリフの前に付けて読み上げる）。例: 😲 😆 🥺 */
+  emoji: z.string().optional(),
   style: z.enum(['bubble', 'bubble-accent', 'caption', 'none']).default('bubble'),
   audio: AudioRef.optional(),
   /** セリフ後の間（秒） */
@@ -193,9 +195,17 @@ export const CastMember = z.object({
   /** 表情 -> 口を開けた全身画像（口パク用。口以外は images と同一） */
   imagesOpen: z.partialRecord(Pose, z.string()).default({}),
   voice: z.object({
+    /** OpenAI TTS のボイス名 */
     voice: z.string().default('marin'),
+    /** OpenAI TTS 用の話し方の指示 */
     instructions: z.string().default(''),
-    speed: z.number().min(0.5).max(2).default(1.05),
+    speed: z.number().min(0.5).max(2).default(1.0),
+    /** Irodori-TTS 用の声のデザイン（キャプション）。例: 「落ち着いた低めの女性の声。丁寧で穏やかな話し方」。空なら instructions を使う */
+    caption: z.string().optional(),
+    /** Irodori-TTS の乱数シード。同じ値なら同じ声になりやすい（キャラごとに固定） */
+    seed: z.number().int().optional(),
+    /** Irodori-TTS サーバーに登録した参照音声の voice ID（声を固定したい時） */
+    refVoice: z.string().optional(),
   }),
 });
 export type CastMember = z.infer<typeof CastMember>;
@@ -223,6 +233,8 @@ export const AudioSettings = z.object({
   sfx: z.boolean().default(true),
   sfxVolume: z.number().min(0).max(1).default(0.6),
   narration: z.boolean().default(true),
+  /** 音声合成エンジン。auto = サーバーの設定（TTS_PROVIDER）に従う */
+  ttsProvider: z.enum(['auto', 'openai', 'irodori']).default('auto'),
   narrationVolume: z.number().min(0).max(2).default(1),
 });
 export type AudioSettings = z.infer<typeof AudioSettings>;

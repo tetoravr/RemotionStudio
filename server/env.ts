@@ -15,6 +15,16 @@ export const config = {
     tts: process.env.OPENAI_TTS_MODEL || 'gpt-4o-mini-tts',
     image: process.env.OPENAI_IMAGE_MODEL || 'gpt-image-2',
   },
+  /** 音声合成。provider=auto は IRODORI_TTS_URL があれば Irodori-TTS、なければ OpenAI */
+  tts: {
+    provider: (process.env.TTS_PROVIDER || 'auto') as 'auto' | 'openai' | 'irodori',
+    irodoriUrl: (process.env.IRODORI_TTS_URL || '').replace(/\/+$/, ''),
+    irodoriModel: process.env.IRODORI_TTS_MODEL || 'irodori-tts',
+    irodoriKey: process.env.IRODORI_TTS_API_KEY || '',
+    irodoriSteps: process.env.IRODORI_NUM_STEPS ? Number(process.env.IRODORI_NUM_STEPS) : undefined,
+    /** 1セリフの生成待ち時間の上限（CPU だと数十秒かかる） */
+    irodoriTimeoutMs: Number(process.env.IRODORI_TIMEOUT_SEC || 600) * 1000,
+  },
   imageQuality: (process.env.OPENAI_IMAGE_QUALITY || 'medium') as 'low' | 'medium' | 'high',
   browserExecutable: process.env.REMOTION_BROWSER_EXECUTABLE || null,
 };

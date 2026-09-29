@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { IRODORI_EMOJI } from '../../src/video/emotions';
 import {
   BACKGROUNDS, ICON_NAMES, POSES, Scene as SceneSchema, TRANSITIONS, Visual,
   type CastMember, type IconName, type Line, type Project, type Scene,
@@ -44,6 +45,7 @@ const buildSchema = (castIds: string[]) => {
     text: str,
     speak: nullable(str),
     delivery: nullable(str),
+    emoji: nullable(enumOf(IRODORI_EMOJI.map((e) => e.emoji))),
     pose: nullable(pose),
     style: enumOf(['bubble', 'bubble-accent', 'caption', 'none']),
   });
@@ -142,6 +144,7 @@ const SYSTEM = `あなたは日本のSNS縦型動画広告（TikTok/リール/�
 - 表示テキストの改行は "\\n" で明示。1行は全角12文字以内。
 - speak（読み上げ用テキスト）は基本 null。読み間違えやすい語（英字のブランド名、難読語）を含む時だけ、句読点・！？はそのまま残し、その語だけをカタカナ/ひらがなにして入れる（例: 「だったら、SUSHI TOP OCR！」→「だったら、スシトップ オーシーアール！」）。文全体をひらがなにしたり、スペースで細切れにしない（不自然な棒読みになる）。
 - delivery（演技指示）は各セリフの気持ちを短く書く（例: 「元気よく」「驚いて」「困り顔で小声で」「ワクワクして」）。単調な読み上げを避けるため、すべてのセリフに付ける。
+- emoji は音声合成（Irodori-TTS）用の感情の絵文字。感情がはっきりしたセリフ（驚き😲・喜び😆・困りごと😟・安堵😌・力強い宣言💪など）にだけ入れ、普通のセリフは null。多用しない（全体の3割以下）。
 - 事実はブリーフにある情報だけを使う。数字・実績を捏造しない（ブリーフに無ければ counter は使わない）。条件付きの主張には footnote で注記。
 - ブランド名は必ずブリーフの表記どおり。
 
@@ -182,7 +185,7 @@ const briefText = (b: Brief) =>
     .filter(Boolean)
     .join('\n');
 
-type AiLine = { speaker: string; text: string; speak: string | null; delivery: string | null; pose: string | null; style: Line['style'] };
+type AiLine = { speaker: string; text: string; speak: string | null; delivery: string | null; emoji: string | null; pose: string | null; style: Line['style'] };
 type AiVisual = {
   kind: string;
   from: IconName | null;
@@ -250,6 +253,7 @@ export const aiToScenes = (ai: AiStoryboard, cast: CastMember[]): Scene[] => {
       text: l.text,
       speak: nn(l.speak) || undefined,
       delivery: nn(l.delivery) || undefined,
+      emoji: nn(l.emoji) || undefined,
       pose: nn(l.pose) || undefined,
       style: !ids.has(l.speaker) && l.style.startsWith('bubble') ? 'caption' : l.style,
     }));

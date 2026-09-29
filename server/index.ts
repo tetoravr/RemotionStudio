@@ -8,7 +8,7 @@ import { blankProject, DEFAULT_CAST } from '../src/video/templates';
 import { LIBRARY_CHARACTERS } from '../src/video/library';
 import { STYLE_PRESETS } from './ai/images';
 import { attachScreenshots, generateStoryboard, reviseStoryboard, type Brief, type ScreenshotRef } from './ai/storyboard';
-import { OPENAI_VOICES, synthesizeToFile } from './ai/tts';
+import { engineId, irodoriStatus, OPENAI_VOICES, resolveProvider, synthesizeToFile } from './ai/tts';
 import { generateCharacter, type CharacterRequest } from './characters';
 import { config, hasOpenAI, ROOT } from './env';
 import { getJob, runningJobs, startJob } from './jobs';
@@ -27,10 +27,17 @@ const h = (fn: Handler) => (req: Request, res: Response, next: NextFunction) => 
 const param = (req: Request, key: string) => String(req.params[key]);
 
 // ---------- メタ情報 ----------
-app.get('/api/meta', (_req, res) => {
+app.get('/api/meta', async (_req, res) => {
+  const irodori = await irodoriStatus();
   res.json({
     openai: hasOpenAI(),
     models: config.models,
+    tts: {
+      /** 環境設定（TTS_PROVIDER）で解決した既定のエンジン */
+      default: resolveProvider('auto'),
+      engines: { openai: engineId('openai'), irodori: engineId('irodori') },
+      irodori,
+    },
     voices: OPENAI_VOICES,
     icons: ICON_NAMES,
     poses: POSES,
@@ -294,10 +301,14 @@ app.post(
 app.post(
   '/api/tts/preview',
   h(async (req, res) => {
-    const { text = 'こんにちは！よろしくね！', voice, delivery } = req.body ?? {};
+    const { text = 'こんにちは！よろしくね！', voice, delivery, emoji, provider } = req.body ?? {};
     const tmp = path.join(config.projectsDir, `.tts-preview-${Date.now()}.wav`);
     try {
-      await synthesizeToFile(String(text).slice(0, 200), voice ?? DEFAULT_CAST[0].voice, tmp, delivery || undefined);
+      await synthesizeToFile(String(text).slice(0, 200), voice ?? DEFAULT_CAST[0].voice, tmp, {
+        delivery: delivery || undefined,
+        emoji: emoji || undefined,
+        provider: resolveProvider(['openai', 'irodori'].includes(provider) ? provider : 'auto'),
+      });
       res.type('audio/wav').send(fs.readFileSync(tmp));
     } finally {
       fs.rmSync(tmp, { force: true });
@@ -352,7 +363,14 @@ app.use((err: Error & { status?: number }, _req: Request, res: Response, _next: 
 });
 
 await seedSamples();
-app.listen(config.port, config.host, () => {
+app.listen(config.port, config.host, async () => {
   console.log(`\n  Ad Studio server: http://localhost:${config.port}`);
-  console.log(`  OpenAI: ${hasOpenAI() ? `有効 (${config.models.text} / ${config.models.tts} / ${config.models.image})` : '未設定（.env に OPENAI_API_KEY を設定すると AI 機能が使えます）'}\n`);
+  console.log(`  OpenAI: ${hasOpenAI() ? `有効 (${config.models.text} / ${config.models.tts} / ${config.models.image})` : '未設定（.env に OPENAI_API_KEY を設定すると AI 機能が使えます）'}`);
+  const provider = resolveProvider('auto');
+  const irodori = await irodoriStatus();
+  console.log(
+    `  ナレーション: ${provider === 'irodori' ? 'Irodori-TTS' : 'OpenAI TTS'}` +
+      (provider === 'irodori' ? (irodori.online ? `（接続OK: ${irodori.url}）` : `（⚠ ${irodori.url} に接続できません。scripts/start-irodori.sh で起動してください）`) : irodori.online ? `（Irodori-TTS も利用可能: ${irodori.url}。使うには .env に IRODORI_TTS_URL を設定）` : '') +
+      '\n',
+  );
 });

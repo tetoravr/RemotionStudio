@@ -1,10 +1,10 @@
 import React, { useContext, useRef, useState } from 'react';
 import { LIBRARY_CHARACTERS, libraryCastMember } from '../../video/library';
 import { POSES, type CastMember, type Pose, type Project } from '../../video/schema';
-import { api } from '../api';
+import { api, ttsFor } from '../api';
 import { MetaContext } from '../App';
 import type { RunJob, Update } from '../pages/Editor';
-import { Field, FilePick, Select, Slider, Text } from './Fields';
+import { Field, FilePick, Num, Select, Slider, Text } from './Fields';
 import { POSE_LABELS } from './SceneInspector';
 
 const STYLE_LABELS: Record<string, string> = {
@@ -54,6 +54,7 @@ const CastCard: React.FC<{ project: Project; member: CastMember; index: number; 
   const [previewing, setPreviewing] = useState(false);
   const [previewErr, setPreviewErr] = useState<string | null>(null);
   const audio = useRef<HTMLAudioElement | null>(null);
+  const tts = ttsFor(meta, project.audio.ttsProvider);
 
   const applyLibrary = (libId: string) =>
     update((p) => {
@@ -67,7 +68,11 @@ const CastCard: React.FC<{ project: Project; member: CastMember; index: number; 
     setPreviewErr(null);
     try {
       const line = project.scenes.flatMap((s) => s.lines).find((l) => l.speaker === c.id);
-      const url = await api.ttsPreview(line?.speak || line?.text || 'こんにちは！今日はよろしくお願いします！', c.voice, line?.delivery);
+      const url = await api.ttsPreview(line?.speak || line?.text || 'こんにちは！今日はよろしくお願いします！', c.voice, {
+        delivery: line?.delivery,
+        emoji: line?.emoji,
+        provider: tts.provider,
+      });
       audio.current?.pause();
       audio.current = new Audio(url);
       await audio.current.play();
@@ -209,23 +214,54 @@ const CastCard: React.FC<{ project: Project; member: CastMember; index: number; 
 
       <div className="sub" style={{ marginTop: 10 }}>
         <div className="label" style={{ marginBottom: 6 }}>
-          🎙 声（OpenAI TTS）
+          🎙 声（{tts.provider === 'irodori' ? 'Irodori-TTS' : 'OpenAI TTS'}）
         </div>
-        <div className="row tight">
-          <Field label="ボイス">
-            <Select value={c.voice.voice} onChange={(v) => set((m) => void (m.voice.voice = v))} options={meta.voices.map((v) => ({ value: v.id, label: v.label }))} />
-          </Field>
-          <Field label="話速調整" hint="1.0が自然。1.1を超えると不自然になりやすい">
-            <Slider value={c.voice.speed} min={0.9} max={1.2} step={0.01} onChange={(v) => set((m) => void (m.voice.speed = v))} format={(v) => `×${v.toFixed(2)}`} />
-          </Field>
-        </div>
-        <Field label="話し方の指示" hint="年齢感・声のトーン・間の取り方など。セリフごとの感情は、シーンの「演技指示」で指定できます">
-          <Text value={c.voice.instructions} onChange={(v) => set((m) => void (m.voice.instructions = v))} multiline />
-        </Field>
+        {tts.provider === 'irodori' ? (
+          <>
+            <Field label="声のデザイン（キャプション）" hint="年齢・性別・声質・話し方を日本語で。例: 落ち着いた低めの女性の声。丁寧で穏やかに話す。空ならこのキャラの「話し方の指示」を使います">
+              <Text
+                value={c.voice.caption ?? ''}
+                onChange={(v) => set((m) => void (m.voice.caption = v || undefined))}
+                multiline
+                placeholder={c.voice.instructions}
+              />
+            </Field>
+            <div className="row tight">
+              <Field label="声のシード" hint="同じ数字なら同じ声になりやすい。声が気に入らなければ数字を変えて試聴">
+                <Num value={c.voice.seed ?? 0} min={0} max={999999} onChange={(v) => set((m) => void (m.voice.seed = Math.round(v)))} />
+              </Field>
+              <Field label="参照音声（声の固定）" hint="サーバーに登録した声を選ぶと、その声をまねます（自分の声・許諾を得た声のみ）。選ぶとキャプションは感情の指示だけに使われます">
+                <Select
+                  value={c.voice.refVoice ?? ''}
+                  onChange={(v) => set((m) => void (m.voice.refVoice = v || undefined))}
+                  options={[{ value: '', label: 'なし（キャプション＋シードで声を作る）' }, ...meta.tts.irodori.voices.map((v) => ({ value: v, label: v }))]}
+                />
+              </Field>
+            </div>
+            <Field label="話速" hint="1.0が標準。上げると、モデル自身が速く話します（音が不自然になりにくい）。セリフごとの感情は、シーンの「感情」「演技指示」で指定できます">
+              <Slider value={c.voice.speed} min={0.8} max={1.3} step={0.01} onChange={(v) => set((m) => void (m.voice.speed = v))} format={(v) => `×${v.toFixed(2)}`} />
+            </Field>
+          </>
+        ) : (
+          <>
+            <div className="row tight">
+              <Field label="ボイス">
+                <Select value={c.voice.voice} onChange={(v) => set((m) => void (m.voice.voice = v))} options={meta.voices.map((v) => ({ value: v.id, label: v.label }))} />
+              </Field>
+              <Field label="話速調整" hint="1.0が自然。1.1を超えると不自然になりやすい">
+                <Slider value={c.voice.speed} min={0.9} max={1.2} step={0.01} onChange={(v) => set((m) => void (m.voice.speed = v))} format={(v) => `×${v.toFixed(2)}`} />
+              </Field>
+            </div>
+            <Field label="話し方の指示" hint="年齢感・声のトーン・間の取り方など。セリフごとの感情は、シーンの「演技指示」で指定できます">
+              <Text value={c.voice.instructions} onChange={(v) => set((m) => void (m.voice.instructions = v))} multiline />
+            </Field>
+          </>
+        )}
         <div className="row center">
-          <button className="btn sm" style={{ flex: 'none' }} disabled={!meta.openai || previewing} onClick={preview}>
+          <button className="btn sm" style={{ flex: 'none' }} disabled={!tts.ready || previewing} onClick={preview}>
             {previewing ? '生成中…' : '▶ 試聴'}
           </button>
+          {previewing && tts.provider === 'irodori' ? <span className="faint">GPUなしだと1文で30〜60秒かかります</span> : null}
           {previewErr ? <span className="faint" style={{ color: 'var(--danger)' }}>{previewErr}</span> : null}
         </div>
       </div>
