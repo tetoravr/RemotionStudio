@@ -27,7 +27,7 @@ export const TalkScene: React.FC<{ scene: SceneOf<'talk'> }> = ({ scene }) => {
   const headP = pop(frame, fps, k.enterOffset + 4, 11, 170);
 
   const first = scene.characters[0];
-  const g = first ? characterGeometry(first, layout) : null;
+  const g = first ? characterGeometry(first, layout, project.cast.find((c) => c.id === first.id)) : null;
 
   // 小道具: 上から落ちてきて着地
   const propW = portrait ? 380 * u : 300 * u;

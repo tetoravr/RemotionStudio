@@ -5,7 +5,7 @@ import { Progress } from './Fields';
 
 type RenderItem = { name: string; url: string; size: number; at: number };
 
-export const RenderDialog: React.FC<{ project: Project; onClose: () => void; staleCount: number }> = ({ project, onClose, staleCount }) => {
+export const RenderDialog: React.FC<{ project: Project; onClose: () => void; staleCount: number; missingShots: number[] }> = ({ project, onClose, staleCount, missingShots }) => {
   const [job, setJob] = useState<Job | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [result, setResult] = useState<string | null>(null);
@@ -43,6 +43,11 @@ export const RenderDialog: React.FC<{ project: Project; onClose: () => void; sta
             音声が未生成のセリフが {staleCount} 件あります（その部分は無音になります）。先に「ナレーション生成」を実行するのがおすすめです。
           </div>
         ) : null}
+        {missingShots.length ? (
+          <div className="error" style={{ marginBottom: 10 }}>
+            シーン{missingShots.join('・')}（画面紹介）に、実際の画面のスクリーンショットが設定されていません。画像を設定するか、そのシーンを削除してください。
+          </div>
+        ) : null}
         {running || job ? (
           <>
             <div className="muted">{job?.message}</div>
@@ -66,7 +71,7 @@ export const RenderDialog: React.FC<{ project: Project; onClose: () => void; sta
             <button className="btn" style={{ flex: 'none' }} onClick={onClose}>
               閉じる
             </button>
-            <button className="btn primary" style={{ flex: 'none' }} onClick={start}>
+            <button className="btn primary" style={{ flex: 'none' }} onClick={start} disabled={missingShots.length > 0}>
               書き出し開始
             </button>
           </div>

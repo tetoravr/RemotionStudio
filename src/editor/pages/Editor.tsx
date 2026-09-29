@@ -3,7 +3,7 @@ import React, { useCallback, useContext, useEffect, useLayoutEffect, useMemo, us
 import { AdVideo } from '../../video/AdVideo';
 import { isAudioStale } from '../../video/narrationKey';
 import { FORMATS, Project, type Scene, type SceneType } from '../../video/schema';
-import { newScene, SCENE_TYPE_LABELS } from '../../video/templates';
+import { newScene, remapCast, SCENE_TYPE_LABELS } from '../../video/templates';
 import { computeTimeline } from '../../video/timeline';
 import { api, waitJob, type Job } from '../api';
 import { go, MetaContext } from '../App';
@@ -209,6 +209,9 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
     [project, meta.models.tts],
   );
 
+  /** 実スクリーンショット未設定の画面紹介シーン（番号）。書き出し前に必須 */
+  const missingShots = useMemo(() => (project ? project.scenes.flatMap((s, i) => (s.type === 'showcase' && !s.screenshot ? [i + 1] : [])) : []), [project]);
+
   const inputProps = useMemo(() => (project ? { project, assetBaseUrl: `/files/${project.id}/` } : null), [project]);
 
   if (loadErr) return <div className="home"><div className="error">{loadErr}</div></div>;
@@ -234,15 +237,7 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
   };
 
   const addScene = (type: SceneType) => {
-    const s = newScene(type, project.brand.name);
-    // テンプレートの hero/buddy をこのプロジェクトのキャストに割り当てる
-    const ids = project.cast.map((c) => c.id);
-    const mapId = (tid: string) => (tid === 'buddy' ? (ids[1] ?? ids[0]) : ids[0]) ?? 'narrator';
-    s.lines.forEach((l) => (l.speaker = mapId(l.speaker)));
-    const seen = new Set<string>();
-    s.characters = s.characters
-      .map((c) => ({ ...c, id: mapId(c.id) }))
-      .filter((c) => c.id !== 'narrator' && !seen.has(c.id) && seen.add(c.id));
+    const s = remapCast(newScene(type, project.brand.name), project.cast.map((c) => c.id));
     update((p) => {
       p.scenes.splice(sel + 1, 0, s);
     });
@@ -338,6 +333,7 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
                       {SCENE_TYPE_LABELS[s.type].split('（')[0]}
                       <span className="dur">{st ? (st.duration / project.fps).toFixed(1) : '-'}s</span>
                       {stale && project.audio.narration ? <span className="audio-stale" title="音声が未生成">●</span> : null}
+                      {s.type === 'showcase' && !s.screenshot ? <span className="audio-stale" title="スクリーンショット未設定">⚠ 画面未設定</span> : null}
                     </div>
                     <div className="text">{sceneSummary(s, project.brand.name) || '（未入力）'}</div>
                   </div>
@@ -453,7 +449,7 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
           {jobErr}（クリックで閉じる）
         </div>
       ) : null}
-      {dialog === 'render' ? <RenderDialog project={project} onClose={() => setDialog(null)} staleCount={staleCount} /> : null}
+      {dialog === 'render' ? <RenderDialog project={project} onClose={() => setDialog(null)} staleCount={staleCount} missingShots={missingShots} /> : null}
       {dialog === 'revise' ? (
         <ReviseDialog
           onClose={() => setDialog(null)}

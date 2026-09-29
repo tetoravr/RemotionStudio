@@ -55,10 +55,12 @@ export const Background: React.FC<{
   const cx = W * center.x;
   const cy = H * center.y;
   const R = Math.hypot(W, H) * 1.1;
+  const D = Math.hypot(W, H) + 400 * u;
   const RAYS = 28;
   const rot = frame * 0.22 * spin;
   const stripeW = 70 * u;
-  const stripeShift = frame * 1.2 * u;
+  // 周期の整数倍で巻き戻す → 継ぎ目なくループ
+  const stripeShift = (frame * 1.2 * u) % (stripeW * 2);
   const dotSize = 30 * u;
 
   return (
@@ -100,10 +102,16 @@ export const Background: React.FC<{
         {p.dot ? <rect width={W} height={H} fill={`url(#${id}-dots)`} mask={kind === 'dots' ? undefined : `url(#${id}-mask)`} /> : null}
       </svg>
       {isStripes ? (
-        <AbsoluteFill
+        // 画面より十分大きい要素を回転し、周期ぶんだけ平行移動する（backgroundPosition を動かすとタイル境界に継ぎ目が出る）
+        <div
           style={{
-            backgroundImage: `repeating-linear-gradient(-58deg, ${p.stripe} 0px, ${p.stripe} ${stripeW}px, transparent ${stripeW}px, transparent ${stripeW * 2}px)`,
-            backgroundPosition: `${stripeShift}px 0px`,
+            position: 'absolute',
+            left: W / 2 - D,
+            top: H / 2 - D,
+            width: D * 2,
+            height: D * 2,
+            transform: `rotate(32deg) translateX(${stripeShift}px)`,
+            backgroundImage: `repeating-linear-gradient(90deg, ${p.stripe} 0px, ${p.stripe} ${stripeW}px, transparent ${stripeW}px, transparent ${stripeW * 2}px)`,
             opacity: 0.9,
           }}
         />

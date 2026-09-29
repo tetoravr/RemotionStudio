@@ -58,7 +58,7 @@ export const listProjects = async (): Promise<ProjectSummary[]> => {
     if (!e.isDirectory()) continue;
     try {
       const p = await loadProject(e.name);
-      const img = p.cast.find((c) => c.kind === 'image')?.images.default;
+      const img = p.cast[0]?.images.default;
       out.push({
         id: p.id,
         title: p.title,
@@ -67,7 +67,7 @@ export const listProjects = async (): Promise<ProjectSummary[]> => {
         primary: p.brand.colors.primary,
         scenes: p.scenes.length,
         updatedAt: p.updatedAt,
-        thumbnail: img ? `/files/${p.id}/${img}` : undefined,
+        thumbnail: img ? (img.startsWith('lib:') ? `/${img.slice(4)}` : `/files/${p.id}/${img}`) : undefined,
       });
     } catch {
       // 壊れたプロジェクトは一覧から除外

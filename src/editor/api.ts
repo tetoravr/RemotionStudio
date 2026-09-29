@@ -7,6 +7,7 @@ export type Meta = {
   icons: string[];
   poses: string[];
   styles: string[];
+  library: { id: string; name: string; kind: 'human' | 'creature' }[];
 };
 
 export type ProjectSummary = {
@@ -49,14 +50,20 @@ export const api = {
   upload: (id: string, file: File) => {
     const fd = new FormData();
     fd.append('file', file);
-    return fetch(`/api/projects/${id}/upload`, { method: 'POST', body: fd }).then((r) => json<{ path: string }>(r));
+    return fetch(`/api/projects/${id}/upload`, { method: 'POST', body: fd }).then((r) => json<{ path: string; size?: { w: number; h: number } }>(r));
+  },
+  /** 新規作成前に、実スクリーンショットを預ける */
+  stage: (file: File) => {
+    const fd = new FormData();
+    fd.append('file', file);
+    return fetch('/api/staging/upload', { method: 'POST', body: fd }).then((r) => json<{ staged: string; name: string; size?: { w: number; h: number } }>(r));
   },
   renders: (id: string) => fetch(`/api/projects/${id}/renders`).then((r) => json<{ name: string; url: string; size: number; at: number }[]>(r)),
   post: (url: string, body: unknown = {}) =>
     fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then((r) => json<{ jobId: string }>(r)),
   job: (id: string) => fetch(`/api/jobs/${id}`).then((r) => json<Job>(r)),
-  ttsPreview: async (text: string, voice: Project['cast'][number]['voice']) => {
-    const r = await fetch('/api/tts/preview', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, voice }) });
+  ttsPreview: async (text: string, voice: Project['cast'][number]['voice'], delivery?: string) => {
+    const r = await fetch('/api/tts/preview', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, voice, delivery }) });
     if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || '試聴に失敗しました');
     return URL.createObjectURL(await r.blob());
   },

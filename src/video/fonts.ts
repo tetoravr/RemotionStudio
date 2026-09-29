@@ -29,11 +29,10 @@ export const collectText = (project: Project): string => {
       const v = s.visual as Record<string, unknown>;
       parts.push(JSON.stringify(v));
     }
-    if (s.type === 'showcase' && s.mockup) parts.push(JSON.stringify(s.mockup));
     if (s.type === 'cta') parts.push(...s.notes);
     if (s.type === 'talk' && s.prop?.label) parts.push(s.prop.label);
   }
-  for (const c of project.cast) parts.push(c.name, c.builtin?.emblem ?? '');
+  for (const c of project.cast) parts.push(c.name);
   return Array.from(new Set(parts.join('').split(''))).join('');
 };
 

@@ -25,7 +25,7 @@ export const SceneCharacters: React.FC = () => {
 /** 話者の頭上に吹き出し。話者がいないセリフは画面中央付近に出す */
 export const SceneBubbles: React.FC<{ fallbackY?: number; minTipY?: number }> = ({ fallbackY, minTipY }) => {
   const { timing } = useScene();
-  const { layout } = useTheme();
+  const { layout, project } = useTheme();
   const { u, width: W, height: H } = layout;
   return (
     <AbsoluteFill style={{ zIndex: 20 }}>
@@ -36,7 +36,7 @@ export const SceneBubbles: React.FC<{ fallbackY?: number; minTipY?: number }> = 
         let tipX = W / 2;
         let tipY = fallbackY ?? H * 0.55;
         if (placement) {
-          const g = characterGeometry(placement, layout);
+          const g = characterGeometry(placement, layout, project.cast.find((c) => c.id === placement.id));
           const side = g.x < W * 0.45 ? 1 : g.x > W * 0.55 ? -1 : 0;
           tipX = g.x + side * g.h * 0.08;
           tipY = Math.max(minTipY ?? 0, g.headY + 10 * u);

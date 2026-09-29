@@ -58,7 +58,7 @@ export const getLayout = (format: FormatId): Layout => {
       visual: { x: safe, y: 720 * u, w: width - safe * 2, h: 560 * u },
       groundY: height + 10 * u,
       slotX: { 'far-left': width * 0.16, left: width * 0.3, center: width * 0.5, right: width * 0.7, 'far-right': width * 0.84 },
-      charHeight: { s: 360 * u, m: 560 * u, l: 780 * u, xl: 1050 * u },
+      charHeight: { s: 430 * u, m: 690 * u, l: 950 * u, xl: 1250 * u },
     };
   }
   if (format === 'square') {
@@ -73,7 +73,7 @@ export const getLayout = (format: FormatId): Layout => {
       visual: { x: width * 0.22, y: 360 * u, w: width * 0.56, h: 380 * u },
       groundY: height + 10 * u,
       slotX: { 'far-left': width * 0.12, left: width * 0.2, center: width * 0.5, right: width * 0.8, 'far-right': width * 0.88 },
-      charHeight: { s: 240 * u, m: 340 * u, l: 460 * u, xl: 600 * u },
+      charHeight: { s: 300 * u, m: 440 * u, l: 610 * u, xl: 800 * u },
     };
   }
   // horizontal
@@ -88,7 +88,7 @@ export const getLayout = (format: FormatId): Layout => {
     visual: { x: width * 0.28, y: 420 * u, w: width * 0.44, h: 420 * u },
     groundY: height + 10 * u,
     slotX: { 'far-left': width * 0.08, left: width * 0.14, center: width * 0.5, right: width * 0.86, 'far-right': width * 0.92 },
-    charHeight: { s: 380 * u, m: 560 * u, l: 720 * u, xl: 880 * u },
+    charHeight: { s: 470 * u, m: 680 * u, l: 880 * u, xl: 1060 * u },
   };
 };
 

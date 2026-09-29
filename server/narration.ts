@@ -39,8 +39,8 @@ export const generateNarration = async (
       const voice = voiceFor(line.speaker, project.cast);
       const rel = `audio/${line.id}-${item.hash}.wav`;
       try {
-        const { durationSec } = await synthesizeToFile(speechText(line), voice, path.join(projectDir, rel));
-        line.audio = { src: rel, durationSec, hash: item.hash };
+        const { durationSec, mouth } = await synthesizeToFile(speechText(line), voice, path.join(projectDir, rel), line.delivery);
+        line.audio = { src: rel, durationSec, hash: item.hash, mouth };
       } catch (e) {
         errors.push(`${line.text}: ${(e as Error).message}`);
       }

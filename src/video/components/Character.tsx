@@ -5,44 +5,65 @@ import type { CastMember, CharacterPlacement, Pose } from '../schema';
 import { useScene } from '../SceneContext';
 import { type Layout, useTheme } from '../theme';
 import { currentPose, speakingLine } from '../timeline';
-import { Mascot } from './Mascot';
 
 const CROP: Record<CharacterPlacement['size'], number> = { s: 0, m: 0.02, l: 0.14, xl: 0.26 };
 
 /** キャラクターの足元・頭の座標（吹き出しの配置に使う） */
-export const characterGeometry = (p: CharacterPlacement, layout: Layout) => {
-  const h = layout.charHeight[p.size];
+/** 横長のキャラ（マスコットなど）は、縦長の人物と同じ高さだと大きすぎるので小さめに表示する */
+export const shapeScale = (member?: CastMember) => (member?.aspect && member.aspect > 0.9 ? 0.72 : 1);
+
+export const characterGeometry = (p: CharacterPlacement, layout: Layout, member?: CastMember) => {
+  const h = layout.charHeight[p.size] * shapeScale(member);
   const x = layout.slotX[p.position];
   const feetY = layout.groundY + h * CROP[p.size];
   return { x, feetY, h, headY: feetY - h * 0.97 };
 };
 
-export const pickImage = (member: CastMember, pose: Pose | string): string | undefined => {
+const POSE_FALLBACKS: Record<string, string[]> = {
+  happy: ['wink', 'wave', 'point'],
+  wink: ['happy', 'wave'],
+  wave: ['happy', 'wink'],
+  point: ['happy', 'wave'],
+  surprised: ['think'],
+  think: ['surprised'],
+  sad: ['think'],
+};
+
+/** 指定の表情の画像を返す。無ければ近い表情で代用する（口を閉じた版と開けた版で同じ表情キーを使う） */
+export const pickPose = (member: CastMember, pose: Pose | string): string | undefined => {
   const imgs = member.images as Record<string, string | undefined>;
-  const fallbacks: Record<string, string[]> = {
-    happy: ['wink', 'wave', 'point'],
-    wink: ['happy', 'wave'],
-    wave: ['happy', 'wink'],
-    point: ['happy', 'wave'],
-    surprised: ['think'],
-    think: ['surprised'],
-    sad: ['think'],
-  };
-  if (imgs[pose]) return imgs[pose];
-  for (const f of fallbacks[pose] ?? []) if (imgs[f]) return imgs[f];
-  return imgs.default ?? Object.values(imgs).find(Boolean);
+  if (imgs[pose]) return pose;
+  for (const f of POSE_FALLBACKS[pose] ?? []) if (imgs[f]) return f;
+  return imgs.default ? 'default' : Object.keys(imgs).find((k) => imgs[k]);
+};
+
+export const pickImages = (member: CastMember, pose: Pose | string): { closed: string; open?: string } | undefined => {
+  const key = pickPose(member, pose);
+  if (!key) return undefined;
+  const closed = (member.images as Record<string, string | undefined>)[key];
+  if (!closed) return undefined;
+  return { closed, open: (member.imagesOpen as Record<string, string | undefined>)[key] };
+};
+
+/** 口の開き（0=閉じ / 1=開き）。音声から算出した口パクデータを使い、無ければ発話中だけ周期的に動かす */
+export const mouthLevel = (talking: { start: number; line: { audio?: { mouth?: number[] } } } | undefined, frame: number, fps: number): number => {
+  if (!talking) return 0;
+  const t = frame - talking.start;
+  const env = talking.line.audio?.mouth;
+  if (env) return env[Math.floor((t * 30) / fps)] ? 1 : 0;
+  return Math.sin(t * 1.25) + Math.sin(t * 0.53) > 0.2 ? 1 : 0;
 };
 
 export const Character: React.FC<{ placement: CharacterPlacement; zIndex?: number }> = ({ placement, zIndex }) => {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
   const theme = useTheme();
-  const { layout, project, colors, resolveAsset, fonts } = theme;
+  const { layout, project, resolveAsset } = theme;
   const { timing, enterOffset } = useScene();
   const member = project.cast.find((c) => c.id === placement.id);
   if (!member) return null;
 
-  const { x, feetY, h } = characterGeometry(placement, layout);
+  const { x, feetY, h } = characterGeometry(placement, layout, member);
   const { u, width: W, height: H } = layout;
   const delay = enterOffset + Math.round(placement.enterDelaySec * fps);
   const t = frame - delay;
@@ -96,13 +117,13 @@ export const Character: React.FC<{ placement: CharacterPlacement; zIndex?: numbe
 
   // 喋っている時は弾む
   const talking = speakingLine(timing.lines, member.id, frame);
-  let mouthOpen = 0;
+  const mouthOpen = mouthLevel(talking, frame, fps) > 0;
   if (talking) {
+    // 話している間は、口の開閉に合わせて体がわずかに弾む
     const lt = frame - talking.start;
-    const hop = Math.abs(Math.sin(lt * 0.42));
-    dy -= hop * 10 * u;
-    sy *= 1 + hop * 0.018;
-    mouthOpen = Math.max(0, Math.sin(lt * 1.25) * 0.6 + Math.sin(lt * 0.53) * 0.4);
+    const hop = Math.abs(Math.sin(lt * 0.34));
+    dy -= hop * 6 * u;
+    sy *= 1 + hop * 0.008;
   }
 
   const pose = currentPose(timing.lines, member.id, frame, placement.pose) as Pose;
@@ -114,26 +135,24 @@ export const Character: React.FC<{ placement: CharacterPlacement; zIndex?: numbe
   }
 
   const flip = placement.flip ? -1 : 1;
-  let body: React.ReactNode;
-  if (member.kind === 'builtin' || !pickImage(member, pose)) {
-    const b = member.builtin ?? { shape: 'mochi' as const, bodyColor: '#ffffff', emblem: '' };
-    body = (
-      <Mascot
-        shape={b.shape}
-        bodyColor={b.bodyColor}
-        accentColor={b.accentColor || colors.primary}
-        outline={colors.dark}
-        emblem={b.emblem}
-        emblemFont={fonts.heading}
-        pose={pose}
-        mouthOpen={mouthOpen}
-        frame={frame}
-        height={h}
-      />
-    );
-  } else {
-    body = <Img src={resolveAsset(pickImage(member, pose))!} style={{ height: h, width: 'auto', display: 'block' }} />;
-  }
+  const imgs = pickImages(member, pose);
+  if (!imgs) return null;
+  // 口を閉じた版と開けた版を重ねて置き、表示だけ切り替える（画像の読み込み待ちでちらつかない）
+  const imgStyle = (visible: boolean): React.CSSProperties => ({
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    height: h,
+    width: 'auto',
+    display: 'block',
+    visibility: visible ? 'visible' : 'hidden',
+  });
+  const body = (
+    <div style={{ position: 'relative', height: h, aspectRatio: 'auto' }}>
+      <Img src={resolveAsset(imgs.closed)!} style={{ ...imgStyle(!mouthOpen || !imgs.open), position: 'relative' }} />
+      {imgs.open ? <Img src={resolveAsset(imgs.open)!} style={imgStyle(mouthOpen)} /> : null}
+    </div>
+  );
 
   return (
     <div

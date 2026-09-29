@@ -2,7 +2,7 @@ import React from 'react';
 import { Img, interpolate, useCurrentFrame, useVideoConfig, Easing } from 'remotion';
 import { bob, clamp, pop } from '../anim';
 import { Icon } from '../components/Icon';
-import { Mascot } from '../components/Mascot';
+import { pickImages } from '../components/Character';
 import { CoinRain, ConfettiBurst, Sparkles } from '../components/Particles';
 import type { Box } from '../theme';
 import type { IconName, Visual } from '../schema';
@@ -200,12 +200,15 @@ export const FeatureVisual: React.FC<{ visual: Visual; box: Box; startAt: number
       const roadY = box.h * 0.72;
       const barrierX = box.w * 0.48;
       const goalSize = Math.min(box.h * 0.42, box.w * 0.26);
-      const runner = project.cast.find((c) => c.kind === 'builtin')?.builtin ?? { shape: 'mochi' as const, bodyColor: '#fff', emblem: '', accentColor: undefined };
-      const rh = box.h * 0.34;
+      const rh = box.h * 0.3;
       const x = interpolate(frame, [runStart, runStart + runDur], [box.w * 0.08, box.w - goalSize * 1.3], { ...clamp, easing: Easing.inOut(Easing.quad) });
       const jumpP = interpolate(x, [barrierX - box.w * 0.2, barrierX + box.w * 0.2], [0, 1], clamp);
       const y = -Math.sin(jumpP * Math.PI) * box.h * 0.5;
       const landed = frame > runStart + runDur;
+      // 走る役は相方（2人目）。表情もジャンプ中は驚き、着地で喜びに切り替える
+      const runner = project.cast[1] ?? project.cast[0];
+      const runnerPose = jumpP > 0 && jumpP < 1 ? 'surprised' : landed ? 'happy' : 'default';
+      const runnerImg = runner ? pickImages(runner, runnerPose)?.closed : undefined;
       const gateP = pop(frame, fps, startAt, 12, 160);
       const goalP = pop(frame, fps, startAt + 3, 12, 160);
       return (
@@ -243,17 +246,7 @@ export const FeatureVisual: React.FC<{ visual: Visual; box: Box; startAt: number
                 <IconTile icon={visual.goal} size={goalSize} p={goalP} badge={landed ? 'check' : null} badgeP={pop(frame, fps, runStart + runDur + 1, 9, 220)} />
               </div>
               <div style={{ position: 'absolute', left: x - rh * 0.45, top: roadY - rh + y + 4 * u, transform: `rotate(${Math.sin(jumpP * Math.PI) * -12}deg)` }}>
-                <Mascot
-                  shape={runner.shape}
-                  bodyColor={runner.bodyColor}
-                  accentColor={runner.accentColor || colors.primary}
-                  outline={colors.dark}
-                  emblem={runner.emblem}
-                  pose={jumpP > 0 && jumpP < 1 ? 'surprised' : landed ? 'happy' : 'default'}
-                  mouthOpen={0}
-                  frame={frame}
-                  height={rh}
-                />
+                {runnerImg ? <Img src={resolveAsset(runnerImg)!} style={{ height: rh, width: 'auto', display: 'block' }} /> : null}
               </div>
             </>,
           )}

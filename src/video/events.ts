@@ -125,7 +125,7 @@ export const collectSfx = (timeline: Timeline, project: Project): SfxEvent[] => 
       }
       case 'showcase':
         at(k.enterOffset + 2, 'whoosh', 0.5);
-        at(k.visualAt + 22 + (s.mockup?.items.length ?? 0) * 4, 'ding', 0.5);
+        at(k.visualAt + 16, 'ding', 0.5);
         break;
       case 'cta':
         at(k.logoAt, 'impact', 0.6);

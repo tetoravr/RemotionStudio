@@ -1,33 +1,16 @@
+import { libraryCastMember } from './library';
 import type { CastMember, FormatId, ProjectInput, Scene, SceneType } from './schema';
 
 const rid = () => Math.random().toString(36).slice(2, 8);
 
-export const DEFAULT_CAST: CastMember[] = [
-  {
-    id: 'hero',
-    name: '主人公',
-    persona: '明るく元気な案内役',
-    kind: 'builtin',
-    builtin: { shape: 'bunny', bodyColor: '#ffffff', emblem: '' },
-    images: {},
-    voice: { voice: 'coral', instructions: '明るく元気な、アニメの女の子の声。テンポよく、語尾をはずませて楽しそうに話す。', speed: 1.2 },
-  },
-  {
-    id: 'buddy',
-    name: '相方',
-    persona: 'とぼけたマスコット。視聴者の本音を代弁する',
-    kind: 'builtin',
-    builtin: { shape: 'mochi', bodyColor: '#ffffff', emblem: '' },
-    images: {},
-    voice: { voice: 'fable', instructions: '小さくてかわいいマスコットキャラクターの声。少し高めで、とぼけた感じ。テンポよく。', speed: 1.15 },
-  },
-];
+/** 標準のキャスト: 人間は速水さき、人外はおすしちゃん */
+export const DEFAULT_CAST: CastMember[] = [libraryCastMember('hayami-saki', 'saki'), libraryCastMember('osushi-chan', 'osushi')];
 
 export const SCENE_TYPE_LABELS: Record<SceneType, string> = {
   logo: 'ロゴ（集中線＋爆発）',
   talk: '会話（吹き出し）',
   feature: '特徴（見出し＋図解）',
-  showcase: '画面紹介（スマホ）',
+  showcase: '画面紹介（実スクリーンショット）',
   cta: 'エンドカード（CTA）',
 };
 
@@ -85,16 +68,7 @@ export const newScene = (type: SceneType, brandName = 'ブランド名'): Scene 
         transition: 'wipe',
         title: '使い方も\n[[かんたん]]。',
         note: '※画面はイメージです',
-        mockup: {
-          appName: brandName,
-          heading: 'ホーム',
-          items: [
-            { label: '項目1', value: '100' },
-            { label: '項目2', value: '200' },
-          ],
-          total: { label: '合計', value: '300' },
-          button: 'はじめる',
-        },
+        screenshotFrame: 'phone',
         lines: [{ ...l('hero', '使い方もかんたん。', 'none'), pose: 'point' }],
         characters: [{ id: 'hero', position: 'far-right', size: 'l', enter: 'slide', pose: 'point', enterDelaySec: 0, flip: false }],
       };
@@ -114,6 +88,17 @@ export const newScene = (type: SceneType, brandName = 'ブランド名'): Scene 
         ],
       };
   }
+};
+
+/** テンプレート内の hero / buddy を、プロジェクトのキャスト（1人目 / 2人目）に置き換える */
+export const remapCast = (scene: Scene, castIds: string[]): Scene => {
+  const map = (tid: string) => (tid === 'buddy' ? (castIds[1] ?? castIds[0]) : tid === 'hero' ? castIds[0] : tid) ?? 'narrator';
+  const seen = new Set<string>();
+  return {
+    ...scene,
+    lines: scene.lines.map((l) => ({ ...l, speaker: l.speaker === 'narrator' ? l.speaker : map(l.speaker) })),
+    characters: scene.characters.map((c) => ({ ...c, id: map(c.id) })).filter((c) => !seen.has(c.id) && seen.add(c.id)),
+  } as Scene;
 };
 
 /** AIを使わずに始めるときの雛形（王道構成） */
@@ -137,7 +122,6 @@ export const blankProject = (opts: { id: string; title: string; brandName: strin
     newScene('feature', b),
     { ...newScene('feature', b), transition: 'slide' } as Scene,
     { ...newScene('feature', b), transition: 'zoom', background: 'burst-dark' } as Scene,
-    newScene('showcase', b),
     newScene('cta', b),
   ];
   return {
@@ -146,7 +130,7 @@ export const blankProject = (opts: { id: string; title: string; brandName: strin
     format: opts.format ?? 'vertical',
     fps: 30,
     brand: { name: b, tagline: '', colors: { primary: '#1f5cff', dark: '#0d1b5e', accent: '#ffd93b', light: '#eaf0ff', text: '#15172b' }, font: 'noto' },
-    cast: DEFAULT_CAST,
-    scenes,
+    cast: DEFAULT_CAST.map((c) => structuredClone(c)),
+    scenes: scenes.map((sc) => remapCast(sc, DEFAULT_CAST.map((c) => c.id))),
   };
 };

@@ -8,6 +8,7 @@ import {
 import { SCENE_TYPE_LABELS } from '../../video/templates';
 import type { SceneTiming } from '../../video/timeline';
 import { api } from '../api';
+import { assetUrl } from './CastPanel';
 import { MetaContext } from '../App';
 import type { Update } from '../pages/Editor';
 import { Field, FilePick, Num, Select, Text, Toggle } from './Fields';
@@ -234,7 +235,10 @@ const LinesEditor: React.FC<{ project: Project; index: number; update: Update; t
                 <Select value={l.pose ?? ''} onChange={(v) => setLine(li, { pose: (v || undefined) as Line['pose'] })} options={[{ value: '', label: '変えない' }, ...POSES.map((p) => ({ value: p, label: POSE_LABELS[p] }))]} />
               </Field>
             </div>
-            <Field label="読み方（任意）" hint="漢字や英字の読み間違い対策。例: スシトップ オーシーアール">
+            <Field label="演技指示（任意）" hint="声の感情。例: 驚いて／困って小声で／ワクワクして。棒読み対策に効果的です">
+              <Text value={l.delivery} onChange={(v) => setLine(li, { delivery: v || undefined })} />
+            </Field>
+            <Field label="読み方（任意）" hint="英字ブランド名などの読み間違い対策。句読点は残して、その語だけ直す。例: だったら、スシトップ オーシーアール！">
               <Text value={l.speak} onChange={(v) => setLine(li, { speak: v || undefined })} />
             </Field>
           </div>
@@ -521,8 +525,13 @@ const VisualEditor: React.FC<{ projectId: string; visual: Visual; onChange: (v: 
 };
 
 const ShowcaseFields: React.FC<{ project: Project; scene: Extract<Scene, { type: 'showcase' }>; set: (k: string, v: unknown) => void }> = ({ project, scene, set }) => {
-  const m = scene.mockup ?? { appName: project.brand.name, heading: '', items: [], button: 'はじめる' };
-  const setM = (patch: Partial<typeof m>) => set('mockup', { ...m, ...patch });
+  const pick = async (f: File) => {
+    const { path, size } = await api.upload(project.id, f);
+    set('screenshot', path);
+    set('screenshotSize', size);
+    // 縦長ならスマホ枠、横長ならブラウザ枠を自動選択
+    if (size) set('screenshotFrame', size.h >= size.w * 1.2 ? 'phone' : 'browser');
+  };
   return (
     <>
       <Field label="タイトル" hint="[[ ]] で強調">
@@ -531,67 +540,28 @@ const ShowcaseFields: React.FC<{ project: Project; scene: Extract<Scene, { type:
       <Field label="注記">
         <Text value={scene.note} onChange={(v) => set('note', v || undefined)} />
       </Field>
-      <Field label="スマホ画面" hint="実際のアプリのスクリーンショット（縦長）を入れると一番伝わります">
+      <Field label="実際の画面のスクリーンショット *" hint="アプリ・管理画面・Webページなど、実際の画面を使います（疑似の画面は作りません）。縦に長い画像は自動でスクロールして全体を見せます">
         <div className="row center">
           {scene.screenshot ? (
-            <>
-              <img src={`/files/${project.id}/${scene.screenshot}`} alt="" style={{ height: 70, flex: 'none', borderRadius: 6 }} />
-              <button className="btn sm" onClick={() => set('screenshot', undefined)}>
-                外す（モックに戻す）
-              </button>
-            </>
+            <img src={assetUrl(project.id, scene.screenshot)} alt="" style={{ height: 90, flex: 'none', borderRadius: 6, border: '1px solid var(--border)' }} />
           ) : (
-            <span className="faint">データから画面モックを自動生成中</span>
+            <span className="faint" style={{ color: 'var(--warn)' }}>未設定（書き出し前に必須）</span>
           )}
-          <FilePick accept="image/*" onFile={async (f) => set('screenshot', (await api.upload(project.id, f)).path)}>
-            スクショを入れる
+          <FilePick accept="image/*" onFile={pick}>
+            {scene.screenshot ? '差し替える' : '画像を選ぶ'}
           </FilePick>
         </div>
       </Field>
-      {!scene.screenshot ? (
-        <div className="sub">
-          <div className="row tight">
-            <Field label="アプリ名">
-              <Text value={m.appName} onChange={(v) => setM({ appName: v })} />
-            </Field>
-            <Field label="画面見出し">
-              <Text value={m.heading} onChange={(v) => setM({ heading: v })} />
-            </Field>
-          </div>
-          <div className="label" style={{ marginBottom: 6 }}>
-            リスト項目
-          </div>
-          {m.items.map((it, i) => (
-            <div className="row tight" key={i}>
-              <Field>
-                <Text value={it.label} onChange={(v) => setM({ items: m.items.map((o, j) => (j === i ? { ...o, label: v } : o)) })} />
-              </Field>
-              <Field style={{ flex: '0 0 90px' }}>
-                <Text value={it.value} onChange={(v) => setM({ items: m.items.map((o, j) => (j === i ? { ...o, value: v } : o)) })} />
-              </Field>
-              <button className="icon-btn" style={{ flex: 'none', marginTop: 6 }} onClick={() => setM({ items: m.items.filter((_, j) => j !== i) })}>
-                ✕
-              </button>
-            </div>
-          ))}
-          {m.items.length < 5 ? (
-            <button className="btn sm" onClick={() => setM({ items: [...m.items, { label: '項目', value: '' }] })} style={{ marginBottom: 10 }}>
-              ＋ 項目
-            </button>
-          ) : null}
-          <div className="row tight">
-            <Field label="合計ラベル">
-              <Text value={m.total?.label} onChange={(v) => setM({ total: v ? { label: v, value: m.total?.value ?? '' } : undefined })} />
-            </Field>
-            <Field label="合計値">
-              <Text value={m.total?.value} onChange={(v) => setM({ total: { label: m.total?.label ?? '合計', value: v } })} />
-            </Field>
-          </div>
-          <Field label="ボタン">
-            <Text value={m.button} onChange={(v) => setM({ button: v })} />
-          </Field>
-        </div>
-      ) : null}
+      <Field label="表示の枠">
+        <Select
+          value={scene.screenshotFrame}
+          onChange={(v) => set('screenshotFrame', v)}
+          options={[
+            { value: 'phone', label: 'スマホ枠（縦長の画面向け）' },
+            { value: 'browser', label: 'ブラウザ枠（PC・管理画面向け）' },
+          ]}
+        />
+      </Field>
     </>
   );
 };

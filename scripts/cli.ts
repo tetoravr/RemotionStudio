@@ -9,15 +9,17 @@
  */
 import express from 'express';
 import fs from 'node:fs';
+import path from 'node:path';
 import type { AddressInfo } from 'node:net';
 
 import { POSES, type Project } from '../src/video/schema';
 import { DEFAULT_CAST } from '../src/video/templates';
-import { generateStoryboard, type Brief } from '../server/ai/storyboard';
+import sharp from 'sharp';
+import { attachScreenshots, generateStoryboard, type Brief, type ScreenshotRef } from '../server/ai/storyboard';
 import { generateCharacter } from '../server/characters';
 import { config, hasOpenAI } from '../server/env';
 import { generateNarration } from '../server/narration';
-import { loadProject, newProjectId, projectDir, saveProject, seedSamples } from '../server/projects';
+import { loadProject, newProjectId, projectDir, saveAsset, saveProject, seedSamples } from '../server/projects';
 import { renderProject } from '../server/render';
 
 const [cmd, ...rest] = process.argv.slice(2);
@@ -65,9 +67,18 @@ const make = async () => {
 
   console.log(`▶ AIが台本を作成中…（${config.models.text}）`);
   const cast = DEFAULT_CAST.map((c) => structuredClone(c));
-  const { ai, scenes } = await generateStoryboard(brief, cast, format);
+  const screenshotFiles = (flags.screenshots ?? '').split(',').filter(Boolean);
+  const { ai, scenes: rawScenes } = await generateStoryboard(brief, cast, format, screenshotFiles.length);
+  const id = newProjectId(brief.productName);
+  const shots: ScreenshotRef[] = [];
+  for (const f of screenshotFiles) {
+    const buf = fs.readFileSync(f);
+    const m = await sharp(buf).metadata();
+    shots.push({ path: await saveAsset(id, path.basename(f), buf), size: m.width && m.height ? { w: m.width, h: m.height } : undefined });
+  }
+  const scenes = attachScreenshots(rawScenes, shots);
   let project = await saveProject({
-    id: newProjectId(brief.productName),
+    id,
     title: ai.title || `${brief.productName} 広告`,
     format,
     fps: 30,
@@ -92,7 +103,11 @@ const make = async () => {
 
   if (flags.character) {
     console.log('\n▶ 主人公の画像を生成中…（約2分）');
-    const r = await generateCharacter(project, { castId: cast[0].id, description: flags.character, style: 'anime', poses: [...POSES] }, bar);
+    const r = await generateCharacter(project, { castId: cast[0].id, description: flags.character, style: 'anime', kind: 'human', poses: [...POSES] }, bar);
+    project.cast[0].images = r.images;
+    project.cast[0].imagesOpen = r.imagesOpen;
+    project.cast[0].library = undefined;
+    project.cast[0].aspect = r.aspect;
     project = await saveProject(project);
     console.log(`\n✔ キャラ画像 ${Object.keys(r.images).length}枚${r.failures.length ? `（失敗 ${r.failures.length}）` : ''}`);
   }
@@ -121,7 +136,7 @@ const main = async () => {
   if (cmd === 'make') await make();
   else if (cmd === 'render') await renderCmd();
   else {
-    console.log('使い方:\n  npm run make -- <brief.json> [--format=vertical] [--character="キャラの説明"] [--no-voice] [--no-render]\n  npm run render -- <projectId> [--format=horizontal]');
+    console.log('使い方:\n  npm run make -- <brief.json> [--format=vertical] [--screenshots=画面1.png,画面2.png] [--character="キャラの説明"] [--no-voice] [--no-render]\n  npm run render -- <projectId> [--format=horizontal]');
   }
 };
 

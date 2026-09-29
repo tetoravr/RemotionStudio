@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import type { Project } from '../../video/schema';
 import { api, waitJob, type Job } from '../api';
 import { go } from '../App';
-import { Field, Progress, Seg, Text } from '../components/Fields';
+import { Field, FilePick, Progress, Seg, Text } from '../components/Fields';
 
 type Brief = {
   productName: string;
@@ -52,12 +52,13 @@ export const NewWizard: React.FC = () => {
   const [format, setFormat] = useState<Project['format']>('vertical');
   const [job, setJob] = useState<Job | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [shots, setShots] = useState<{ staged: string; name: string; url: string }[]>([]);
   const set = (k: keyof Brief) => (v: string) => setB((o) => ({ ...o, [k]: v }));
 
   const submit = async () => {
     setErr(null);
     try {
-      const { jobId } = await api.post('/api/ai/storyboard', { brief: b, format });
+      const { jobId } = await api.post('/api/ai/storyboard', { brief: b, format, screenshots: shots.map((x) => ({ staged: x.staged, name: x.name })) });
       const done = await waitJob(jobId, setJob);
       go(`/p/${(done.result as { projectId: string }).projectId}`);
     } catch (e) {
@@ -115,7 +116,37 @@ export const NewWizard: React.FC = () => {
         </Field>
       </div>
       <div className="panel" style={{ marginTop: 16 }}>
-        <h3>2. 見せ方</h3>
+        <h3>2. 実際の画面（スクリーンショット）</h3>
+        <div className="muted" style={{ marginBottom: 10, lineHeight: 1.7 }}>
+          アプリ・管理画面・Webページなど、<b>実際の画面</b>の画像を入れると、その枚数ぶんだけ「画面紹介」シーンを作ります（疑似の画面は作りません）。
+          入れない場合は画面紹介シーンなしの構成になります。
+        </div>
+        <div className="row center" style={{ flexWrap: 'wrap', gap: 10 }}>
+          {shots.map((x, i) => (
+            <div key={x.staged} style={{ flex: 'none', position: 'relative' }}>
+              <img src={x.url} alt={x.name} style={{ height: 110, borderRadius: 8, border: '1px solid var(--border)' }} />
+              <button className="icon-btn" style={{ position: 'absolute', top: 2, right: 2, background: 'rgba(0,0,0,.6)' }} onClick={() => setShots((o) => o.filter((_, j) => j !== i))}>
+                ✕
+              </button>
+            </div>
+          ))}
+          <FilePick
+            accept="image/*"
+            onFile={async (f) => {
+              try {
+                const r = await api.stage(f);
+                setShots((o) => [...o, { staged: r.staged, name: r.name, url: URL.createObjectURL(f) }].slice(0, 4));
+              } catch (e) {
+                setErr((e as Error).message);
+              }
+            }}
+          >
+            ＋ スクリーンショットを追加（最大4枚）
+          </FilePick>
+        </div>
+      </div>
+      <div className="panel" style={{ marginTop: 16 }}>
+        <h3>3. 見せ方</h3>
         <div className="row">
           <Field label="CTA（視聴者にしてほしい行動）">
             <Text value={b.cta} onChange={set('cta')} placeholder="例: 資料請求はこちら" />

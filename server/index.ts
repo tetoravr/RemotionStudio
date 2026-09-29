@@ -2,10 +2,12 @@ import express, { type NextFunction, type Request, type Response } from 'express
 import fs from 'node:fs';
 import path from 'node:path';
 import multer from 'multer';
+import sharp from 'sharp';
 import { BACKGROUNDS, FORMATS, ICON_NAMES, POSES, Project, TRANSITIONS } from '../src/video/schema';
 import { blankProject, DEFAULT_CAST } from '../src/video/templates';
+import { LIBRARY_CHARACTERS } from '../src/video/library';
 import { STYLE_PRESETS } from './ai/images';
-import { generateStoryboard, reviseStoryboard, type Brief } from './ai/storyboard';
+import { attachScreenshots, generateStoryboard, reviseStoryboard, type Brief, type ScreenshotRef } from './ai/storyboard';
 import { OPENAI_VOICES, synthesizeToFile } from './ai/tts';
 import { generateCharacter, type CharacterRequest } from './characters';
 import { config, hasOpenAI, ROOT } from './env';
@@ -36,6 +38,7 @@ app.get('/api/meta', (_req, res) => {
     backgrounds: BACKGROUNDS,
     transitions: TRANSITIONS,
     styles: Object.keys(STYLE_PRESETS),
+    library: Object.entries(LIBRARY_CHARACTERS).map(([id, c]) => ({ id, name: c.name, kind: c.kind })),
   });
 });
 
@@ -85,7 +88,8 @@ app.post(
       return;
     }
     const name = Buffer.from(req.file.originalname, 'latin1').toString('utf8');
-    res.json({ path: await saveAsset(param(req, 'id'), name, req.file.buffer) });
+    const saved = await saveAsset(param(req, 'id'), name, req.file.buffer);
+    res.json({ path: saved, size: await imageSize(req.file.buffer) });
   }),
 );
 
@@ -99,20 +103,68 @@ app.get('/api/projects/:id/renders', h(async (req, res) => {
   );
 }));
 
+// ---------- 新規作成前のスクリーンショット預かり ----------
+const stagingDir = () => path.join(config.projectsDir, '.staging');
+const imageSize = async (buf: Buffer) => {
+  try {
+    const m = await sharp(buf).metadata();
+    // EXIF の回転を考慮
+    const rotated = (m.orientation ?? 1) >= 5;
+    return m.width && m.height ? { w: rotated ? m.height : m.width, h: rotated ? m.width : m.height } : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+app.post(
+  '/api/staging/upload',
+  upload.single('file'),
+  h(async (req, res) => {
+    if (!req.file) {
+      res.status(400).json({ error: 'ファイルがありません' });
+      return;
+    }
+    fs.mkdirSync(stagingDir(), { recursive: true });
+    const name = Buffer.from(req.file.originalname, 'latin1').toString('utf8');
+    const staged = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}${path.extname(name).toLowerCase().replace(/[^.a-z0-9]/g, '') || '.png'}`;
+    fs.writeFileSync(path.join(stagingDir(), staged), req.file.buffer);
+    res.json({ staged, name, size: await imageSize(req.file.buffer) });
+  }),
+);
+
+/** 預かったスクリーンショットをプロジェクトの assets に移す */
+const adoptStaged = async (projectId: string, staged: string): Promise<ScreenshotRef> => {
+  if (!/^[a-z0-9.-]+$/i.test(staged)) throw new Error('invalid staged file');
+  const file = path.join(stagingDir(), staged);
+  const buf = fs.readFileSync(file);
+  const rel = await saveAsset(projectId, staged, buf);
+  fs.rmSync(file, { force: true });
+  return { path: rel, size: await imageSize(buf) };
+};
+
 // ---------- AI ----------
 app.post(
   '/api/ai/storyboard',
   h(async (req, res) => {
-    const { brief, format = 'vertical', colors } = req.body as { brief: Brief; format?: Project['format']; colors?: Project['brand']['colors'] };
+    const { brief, format = 'vertical', colors, screenshots = [] } = req.body as {
+      brief: Brief;
+      format?: Project['format'];
+      colors?: Project['brand']['colors'];
+      /** /api/staging/upload で預けた実スクリーンショット */
+      screenshots?: { staged: string; name?: string }[];
+    };
     if (!brief?.productName || !brief?.oneLiner) {
       res.status(400).json({ error: '商品名と「ひとことで」は必須です' });
       return;
     }
     const job = startJob('storyboard', undefined, async (ctx) => {
       ctx.progress(0.1, 'AIが台本を書いています（30〜60秒）');
-      const cast = DEFAULT_CAST.map((c) => ({ ...c }));
-      const { ai, scenes } = await generateStoryboard(brief, cast, format);
+      const cast = DEFAULT_CAST.map((c) => structuredClone(c));
+      const { ai, scenes: rawScenes } = await generateStoryboard(brief, cast, format, screenshots.length);
       const id = newProjectId(brief.productName);
+      const shots: ScreenshotRef[] = [];
+      for (const sh of screenshots) shots.push(await adoptStaged(id, sh.staged));
+      const scenes = attachScreenshots(rawScenes, shots);
       const project = await saveProject({
         id,
         title: ai.title || `${brief.productName} 広告`,
@@ -147,6 +199,12 @@ const carryOverAudio = (before: Project, after: Project) => {
   for (const s of after.scenes) for (const l of s.lines) l.audio = map.get(`${l.speaker}|${l.speak || l.text}`);
 };
 
+/** AI改稿後も、画面紹介シーンには元のスクリーンショットを順番に割り当て直す（足りなければそのシーンは外す） */
+const keepScreenshots = (before: Project, scenes: Project['scenes']) => {
+  const shots = before.scenes.flatMap((s) => (s.type === 'showcase' && s.screenshot ? [{ path: s.screenshot, size: s.screenshotSize }] : []));
+  return attachScreenshots(scenes, shots);
+};
+
 app.post(
   '/api/projects/:id/ai/revise',
   h(async (req, res) => {
@@ -162,6 +220,7 @@ app.post(
       const { ai, scenes } = await reviseStoryboard(project, instruction);
       const next: Project = { ...project, title: ai.title || project.title, brand: { ...project.brand, tagline: ai.tagline || project.brand.tagline }, scenes };
       carryOverAudio(project, next);
+      next.scenes = keepScreenshots(project, next.scenes);
       await saveProject(next);
       return { projectId: id };
     });
@@ -206,17 +265,27 @@ app.post(
       const project = await loadProject(id);
       const result = await generateCharacter(
         project,
-        { castId: param(req, 'castId'), description: body.description, style: body.style ?? 'anime', poses: body.poses ?? [...POSES], keepBase: body.keepBase },
+        {
+          castId: param(req, 'castId'),
+          description: body.description,
+          style: body.style ?? 'anime',
+          kind: body.kind ?? 'human',
+          poses: body.poses ?? [...POSES],
+          referenceAssets: body.referenceAssets,
+        },
         (p, m) => ctx.progress(p, m),
       );
       const latest = await loadProject(id);
       const member = latest.cast.find((c) => c.id === param(req, 'castId'));
       if (member) {
         member.images = result.images;
-        member.kind = 'image';
+        member.imagesOpen = result.imagesOpen;
+        member.library = undefined;
+        member.aspect = result.aspect;
+        // 画像が変わったので、口パクデータは変わらない（音声は同じ）。表情の欠けはそのまま近い表情で代用される
       }
       await saveProject(latest);
-      return result;
+      return { count: Object.keys(result.images).length, failures: result.failures };
     });
     res.json({ jobId: job.id });
   }),
@@ -225,10 +294,10 @@ app.post(
 app.post(
   '/api/tts/preview',
   h(async (req, res) => {
-    const { text = 'こんにちは！よろしくね！', voice } = req.body ?? {};
+    const { text = 'こんにちは！よろしくね！', voice, delivery } = req.body ?? {};
     const tmp = path.join(config.projectsDir, `.tts-preview-${Date.now()}.wav`);
     try {
-      await synthesizeToFile(String(text).slice(0, 200), voice ?? DEFAULT_CAST[0].voice, tmp);
+      await synthesizeToFile(String(text).slice(0, 200), voice ?? DEFAULT_CAST[0].voice, tmp, delivery || undefined);
       res.type('audio/wav').send(fs.readFileSync(tmp));
     } finally {
       fs.rmSync(tmp, { force: true });
@@ -243,6 +312,12 @@ app.post(
     const id = param(req, 'id');
     if (runningJobs(id).some((j) => j.kind === 'render')) {
       res.status(409).json({ error: 'この動画はすでに書き出し中です' });
+      return;
+    }
+    const check = await loadProject(id);
+    const missing = check.scenes.map((sc, i) => (sc.type === 'showcase' && !sc.screenshot ? i + 1 : 0)).filter(Boolean);
+    if (missing.length) {
+      res.status(400).json({ error: `シーン${missing.join('・')}（画面紹介）に実際のスクリーンショットが設定されていません。画像を設定するか、シーンを削除してください。` });
       return;
     }
     const job = startJob('render', id, async (ctx) => {

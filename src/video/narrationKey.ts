@@ -16,8 +16,8 @@ const cyrb53 = (str: string, seed = 0) => {
 
 export const NARRATOR_VOICE: CastMember['voice'] = {
   voice: 'marin',
-  instructions: '明るく聞き取りやすいCMナレーション。テンポよく、はっきりと。',
-  speed: 1.1,
+  instructions: '明るく聞き取りやすいCMナレーション。自然な話し方で、テンポよく、はっきりと。',
+  speed: 1.0,
 };
 
 export const voiceFor = (speaker: string, cast: CastMember[]): CastMember['voice'] =>
@@ -28,7 +28,7 @@ export const speechText = (line: Line) => (line.speak || line.text).replace(/\[\
 
 /** セリフ音声の同一性キー。文言・声・話速・モデルが変わったら再生成が必要 */
 export const narrationHash = (line: Line, voice: CastMember['voice'], ttsModel: string) =>
-  cyrb53(JSON.stringify([speechText(line), voice.voice, voice.instructions, voice.speed, ttsModel]));
+  cyrb53(JSON.stringify([speechText(line), line.delivery ?? '', voice.voice, voice.instructions, voice.speed, ttsModel]));
 
 export const isAudioStale = (line: Line, cast: CastMember[], ttsModel: string) =>
   Boolean(speechText(line).trim()) && (!line.audio || line.audio.hash !== narrationHash(line, voiceFor(line.speaker, cast), ttsModel));

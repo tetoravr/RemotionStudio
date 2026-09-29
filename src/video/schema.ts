@@ -43,6 +43,8 @@ export const AudioRef = z.object({
   durationSec: z.number(),
   /** テキスト・声質の変更検知用ハッシュ（変わっていたら再生成が必要） */
   hash: z.string(),
+  /** 口パク用の口の開き（30Hz、0=閉じ / 1=開き）。音声の音量から算出 */
+  mouth: z.array(z.number().int().min(0).max(2)).optional(),
 });
 export type AudioRef = z.infer<typeof AudioRef>;
 
@@ -56,6 +58,8 @@ export const Line = z.object({
   speak: z.string().optional(),
   /** このセリフ中の話者ポーズ */
   pose: Pose.optional(),
+  /** 演技指示（声のトーン）。例: 「驚いて」「落ち込んで小声で」「元気よく」 */
+  delivery: z.string().optional(),
   style: z.enum(['bubble', 'bubble-accent', 'caption', 'none']).default('bubble'),
   audio: AudioRef.optional(),
   /** セリフ後の間（秒） */
@@ -108,15 +112,6 @@ export const Visual = z.discriminatedUnion('kind', [
 ]);
 export type Visual = z.infer<typeof Visual>;
 
-export const MockupUi = z.object({
-  appName: z.string(),
-  heading: z.string(),
-  items: z.array(z.object({ label: z.string(), value: z.string() })).max(5),
-  total: z.object({ label: z.string(), value: z.string() }).optional(),
-  button: z.string(),
-});
-export type MockupUi = z.infer<typeof MockupUi>;
-
 const sceneBase = {
   id: z.string(),
   lines: z.array(Line).default([]),
@@ -163,8 +158,12 @@ export const ShowcaseScene = z.object({
   type: z.literal('showcase'),
   title: z.string(),
   note: z.string().optional(),
+  /** 実際の画面のスクリーンショット（アプリ・管理画面・Webページなど）。UIの疑似モックは使わない */
   screenshot: z.string().optional(),
-  mockup: MockupUi.optional(),
+  /** スクリーンショットの実寸（アップロード時に自動設定）。縦に長い画面はスクロールして見せる */
+  screenshotSize: z.object({ w: z.number(), h: z.number() }).optional(),
+  /** phone = スマホ枠 / browser = ブラウザ窓 */
+  screenshotFrame: z.enum(['phone', 'browser']).default('phone'),
 });
 export const CtaScene = z.object({
   ...sceneBase,
@@ -183,25 +182,20 @@ export type SceneOf<T extends SceneType> = Extract<Scene, { type: T }>;
 export const CastMember = z.object({
   id: z.string(),
   name: z.string(),
-  /** キャラ設定（AI台本生成に使う） */
+  /** キャラ設定（AI台本に使う） */
   persona: z.string().default(''),
-  /** builtin = コードで描くマスコット / image = ポーズ別画像 */
-  kind: z.enum(['builtin', 'image']),
-  builtin: z
-    .object({
-      shape: z.enum(['mochi', 'cat', 'bear', 'bunny', 'bird', 'sushi']).default('mochi'),
-      bodyColor: z.string().default('#ffffff'),
-      /** 手足などの色。空ならブランドのメインカラー */
-      accentColor: z.string().optional(),
-      emblem: z.string().default(''),
-    })
-    .optional(),
-  /** pose -> 画像パス（プロジェクトの assets からの相対パス or URL） */
+  /** ライブラリキャラのID（hayami-saki / osushi-chan）。カスタムキャラは未設定 */
+  library: z.string().optional(),
+  /** 画像の縦横比（幅/高さ）。縦長の人物と横長のマスコットで、表示サイズを揃えるのに使う */
+  aspect: z.number().optional(),
+  /** 表情 -> 口を閉じた全身画像。パスは assets/ 相対、または lib:（組み込みライブラリ）、URL */
   images: z.partialRecord(Pose, z.string()).default({}),
+  /** 表情 -> 口を開けた全身画像（口パク用。口以外は images と同一） */
+  imagesOpen: z.partialRecord(Pose, z.string()).default({}),
   voice: z.object({
-    voice: z.string().default('coral'),
+    voice: z.string().default('marin'),
     instructions: z.string().default(''),
-    speed: z.number().min(0.5).max(2).default(1.1),
+    speed: z.number().min(0.5).max(2).default(1.05),
   }),
 });
 export type CastMember = z.infer<typeof CastMember>;

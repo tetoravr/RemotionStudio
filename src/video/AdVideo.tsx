@@ -19,6 +19,7 @@ const MOVE_FRAMES = 10;
 
 export const makeAssetResolver = (base: string) => (path: string | undefined) => {
   if (!path) return undefined;
+  if (path.startsWith('lib:')) return staticFile(path.slice(4));
   if (/^(https?:|data:|blob:|\/)/.test(path)) return path;
   if (base.startsWith('static:')) return staticFile(base.slice(7) + path);
   if (base) return base + path;

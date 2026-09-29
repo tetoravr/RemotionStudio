@@ -43,6 +43,7 @@ const buildSchema = (castIds: string[]) => {
     speaker,
     text: str,
     speak: nullable(str),
+    delivery: nullable(str),
     pose: nullable(pose),
     style: enumOf(['bubble', 'bubble-accent', 'caption', 'none']),
   });
@@ -101,7 +102,6 @@ const buildSchema = (castIds: string[]) => {
         ...common,
         title: str,
         note: nullable(str),
-        mockup: obj({ appName: str, heading: str, items: arr(obj({ label: str, value: str })), total: nullable(obj({ label: str, value: str })), button: str }),
       }),
       obj({ type: enumOf(['cta']), ...common, buttonText: str, contact: nullable(str), notes: arr(str) }),
     ],
@@ -126,11 +126,11 @@ const SYSTEM = `あなたは日本のSNS縦型動画広告（TikTok/リール/�
   3. talk: 課題提起。主人公が「〇〇、困ってない？」（style:"bubble-accent"）→ 相方が「ダメだった〜……」等の共感（pose:"sad"）。prop に課題を象徴するアイコン＋NGバッジ。transition:"wipe"。
   4. logo: 解決。主人公「だったら、〇〇！」（ブランド名を含める）→ 相方「なにがいいの！？」。subtitle にタグライン。transition:"flash"。
   5〜7. feature ×3: eyebrow（1行目・強調語を[[ ]]で囲む）と headline（特大・6文字以内・「！」で終わる）。主人公が eyebrow と headline をそれぞれ別セリフで読み上げる（style:"none"、text は eyebrow/headline と同じ文言。[[ ]]は外す）。最後に相方が短いリアクション（「マジで！？」「いいね〜！」等、style:"bubble"）。visual で内容を図解。3つ目は background:"burst-dark" にしてメリハリを付ける。transition は wipe/slide/zoom を混ぜる。
-  8. showcase: 実際の使い方（アプリ画面やサービスの流れ）を mockup で見せる。title は2行、強調語を[[ ]]。
+  8. showcase: 実際の画面のスクリーンショットを見せる。**スクリーンショットが用意されている枚数ぶんだけ**作る（0枚なら showcase は1つも作らない。疑似の画面は作れない）。title は2行、強調語を[[ ]]。
   9. logo: ブランド名をもう一度（subtitle にタグライン）。
   10. cta: ボタン文言（例「導入のご相談、受付中！」「無料で試してみる」）と連絡先。
-- 15秒なら 6シーン程度（logo→課題talk→解決logo→feature×2→cta）、60秒なら feature を最大5つ・showcase を2つまで。
-- 全セリフの合計は 30秒で 150〜190文字程度（15秒なら約80文字、60秒なら約330文字）。
+- 15秒なら 6シーン程度（logo→課題talk→解決logo→feature×2→cta）、60秒なら feature を最大5つ。
+- 全セリフの合計は 30秒で 110〜140文字程度（15秒なら約60文字、60秒なら約250文字）。ナレーションは自然な速さで読み上げるので、詰め込みすぎない。
 
 # キャラクター配置のルール
 - 縦型画面の下部にキャラが立つ。position は far-left/left/center/right/far-right、size は s/m/l/xl（xlは上半身アップ）。
@@ -140,7 +140,8 @@ const SYSTEM = `あなたは日本のSNS縦型動画広告（TikTok/リール/�
 
 # 文字・読み上げのルール
 - 表示テキストの改行は "\\n" で明示。1行は全角12文字以内。
-- 読み間違えやすい漢字（例: 与信審査→よしんしんさ、着金→ちゃっきん、消込→けしこみ）や英字・記号を含むセリフは speak にひらがな/カタカナの読みを入れる。不要なら null。
+- speak（読み上げ用テキスト）は基本 null。読み間違えやすい語（英字のブランド名、難読語）を含む時だけ、句読点・！？はそのまま残し、その語だけをカタカナ/ひらがなにして入れる（例: 「だったら、SUSHI TOP OCR！」→「だったら、スシトップ オーシーアール！」）。文全体をひらがなにしたり、スペースで細切れにしない（不自然な棒読みになる）。
+- delivery（演技指示）は各セリフの気持ちを短く書く（例: 「元気よく」「驚いて」「困り顔で小声で」「ワクワクして」）。単調な読み上げを避けるため、すべてのセリフに付ける。
 - 事実はブリーフにある情報だけを使う。数字・実績を捏造しない（ブリーフに無ければ counter は使わない）。条件付きの主張には footnote で注記。
 - ブランド名は必ずブリーフの表記どおり。
 
@@ -158,7 +159,10 @@ const SYSTEM = `あなたは日本のSNS縦型動画広告（TikTok/リール/�
 
 const describeCast = (cast: CastMember[]) =>
   cast
-    .map((c, i) => `- id:"${c.id}" 名前:${c.name} 役割:${i === 0 ? '主人公（説明役）' : '相方（リアクション役・視聴者の代弁）'}${c.persona ? ` 設定:${c.persona}` : ''}`)
+    .map(
+      (c, i) =>
+        `- id:"${c.id}" 名前:${c.name} 役割:${i === 0 ? '主人公（説明役）' : '相方（リアクション役・視聴者の代弁）'}${c.persona ? ` 設定:${c.persona}` : ''} 使える表情(pose):${Object.keys(c.images).join('/')}`,
+    )
     .join('\n');
 
 const briefText = (b: Brief) =>
@@ -178,7 +182,7 @@ const briefText = (b: Brief) =>
     .filter(Boolean)
     .join('\n');
 
-type AiLine = { speaker: string; text: string; speak: string | null; pose: string | null; style: Line['style'] };
+type AiLine = { speaker: string; text: string; speak: string | null; delivery: string | null; pose: string | null; style: Line['style'] };
 type AiVisual = {
   kind: string;
   from: IconName | null;
@@ -245,6 +249,7 @@ export const aiToScenes = (ai: AiStoryboard, cast: CastMember[]): Scene[] => {
       speaker: ids.has(l.speaker) ? l.speaker : 'narrator',
       text: l.text,
       speak: nn(l.speak) || undefined,
+      delivery: nn(l.delivery) || undefined,
       pose: nn(l.pose) || undefined,
       style: !ids.has(l.speaker) && l.style.startsWith('bubble') ? 'caption' : l.style,
     }));
@@ -279,17 +284,9 @@ export const aiToScenes = (ai: AiStoryboard, cast: CastMember[]): Scene[] => {
           visual: toVisual(x.visual as AiVisual),
         };
         break;
-      case 'showcase': {
-        const m = x.mockup;
-        cand = {
-          ...base,
-          type: 'showcase',
-          title: x.title,
-          note: nn(x.note),
-          mockup: m ? { appName: m.appName, heading: m.heading, items: (m.items ?? []).slice(0, 5), total: nn(m.total), button: m.button } : undefined,
-        };
+      case 'showcase':
+        cand = { ...base, type: 'showcase', title: x.title, note: nn(x.note) };
         break;
-      }
       default:
         cand = { ...base, type: 'cta', buttonText: x.buttonText ?? '詳しくはこちら', contact: nn(x.contact), notes: x.notes ?? [] };
     }
@@ -303,7 +300,7 @@ export const aiToScenes = (ai: AiStoryboard, cast: CastMember[]): Scene[] => {
 /** プロジェクトのシーン → AI入力用（改稿時に渡す） */
 export const scenesToAi = (scenes: Scene[]) =>
   scenes.map((s) => {
-    const { id: _id, lines, ...rest } = s as Scene & Record<string, unknown>;
+    const { id: _id, lines, screenshot: _sc, screenshotSize: _ss, ...rest } = s as Scene & Record<string, unknown>;
     return { ...rest, lines: lines.map(({ id: _l, audio: _a, ...l }) => l) };
   });
 
@@ -330,8 +327,22 @@ const formatNote = (format: Project['format']) =>
     ? '画面: 縦型 9:16（スマホ全画面）。'
     : `画面: ${format === 'horizontal' ? '横型 16:9' : '正方形 1:1'}。画面中央は文字と図解に使うので、logo/feature/showcase/cta シーンのキャラは far-left / left / right / far-right に置き、center は使わない。`;
 
-export const generateStoryboard = async (brief: Brief, cast: CastMember[], format: Project['format'] = 'vertical') => {
-  const user = `# 登場キャラクター\n${describeCast(cast)}\n\n# 商品ブリーフ\n${briefText(brief)}\n${formatNote(format)}\n\n上記で広告動画の台本JSONを作ってください。`;
+export type ScreenshotRef = { path: string; size?: { w: number; h: number } };
+
+/** showcase シーンに実スクリーンショットを順番に割り当てる。画像が足りない showcase は除外する */
+export const attachScreenshots = (scenes: Scene[], shots: ScreenshotRef[]): Scene[] => {
+  let i = 0;
+  return scenes.flatMap((s) => {
+    if (s.type !== 'showcase') return [s];
+    const shot = shots[i++];
+    if (!shot) return [];
+    const portrait = shot.size ? shot.size.h >= shot.size.w * 1.2 : true;
+    return [{ ...s, screenshot: shot.path, screenshotSize: shot.size, screenshotFrame: portrait ? 'phone' : 'browser' } as Scene];
+  });
+};
+
+export const generateStoryboard = async (brief: Brief, cast: CastMember[], format: Project['format'] = 'vertical', screenshotCount = 0) => {
+  const user = `# 登場キャラクター\n${describeCast(cast)}\n\n# 商品ブリーフ\n${briefText(brief)}\n実スクリーンショット: ${screenshotCount}枚（showcase シーンの数）\n${formatNote(format)}\n\n上記で広告動画の台本JSONを作ってください。`;
   const ai = await callModel(SYSTEM, user, cast);
   return { ai, scenes: aiToScenes(ai, cast) };
 };

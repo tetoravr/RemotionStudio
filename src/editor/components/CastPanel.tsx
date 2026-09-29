@@ -1,44 +1,40 @@
 import React, { useContext, useRef, useState } from 'react';
+import { LIBRARY_CHARACTERS, libraryCastMember } from '../../video/library';
 import { POSES, type CastMember, type Pose, type Project } from '../../video/schema';
 import { api } from '../api';
 import { MetaContext } from '../App';
 import type { RunJob, Update } from '../pages/Editor';
-import { Field, Seg, Select, Slider, Text } from './Fields';
+import { Field, FilePick, Select, Slider, Text } from './Fields';
 import { POSE_LABELS } from './SceneInspector';
 
-const STYLE_LABELS: Record<string, string> = { anime: 'アニメ（ちびキャラ）', mascot: 'ゆるキャラ', flat: 'フラットイラスト', '3d': '3Dトイ風' };
-const SHAPES = [
-  { value: 'mochi', label: 'おもち' },
-  { value: 'sushi', label: 'おすし' },
-  { value: 'cat', label: 'ねこ' },
-  { value: 'bear', label: 'くま' },
-  { value: 'bunny', label: 'うさぎ' },
-  { value: 'bird', label: 'とり' },
-] as const;
+const STYLE_LABELS: Record<string, string> = {
+  anime: 'アニメ調（基準画像に合わせる）',
+  chibi: 'ちびキャラ',
+  mascot: 'ゆるキャラ',
+  flat: 'フラットイラスト',
+  '3d': '3Dトイ風',
+};
 
-export const CastPanel: React.FC<{ project: Project; update: Update; runJob: RunJob; flush: () => Promise<void> }> = ({ project, update, runJob, flush }) => {
+/** プロジェクト内パス（assets/..）・ライブラリ(lib:)・URL を、エディターで表示できるURLにする */
+export const assetUrl = (projectId: string, p: string) => (p.startsWith('lib:') ? `/${p.slice(4)}` : /^(https?:|data:|blob:|\/)/.test(p) ? p : `/files/${projectId}/${p}`);
+
+export const CastPanel: React.FC<{ project: Project; update: Update; runJob: RunJob; flush: () => Promise<void> }> = ({ project, update, runJob }) => {
   return (
     <div>
       <div className="notice" style={{ marginBottom: 12 }}>
-        1人目が主人公（説明役）、2人目が相方（リアクション役）として AI 台本に使われます。画像キャラは表情ごとの透過画像を用意するか、AIで生成できます。
+        1人目が主人公（説明役）、2人目が相方（リアクション役）です。人間は <b>速水さき</b>、人外（マスコット）は <b>おすしちゃん</b> を使います。
+        各表情に「口を閉じた画像」と「口を開けた画像」があり、ナレーションの音声に合わせて口パクします。
       </div>
       {project.cast.map((c, i) => (
-        <CastCard key={c.id} project={project} member={c} index={i} update={update} runJob={runJob} flush={flush} />
+        <CastCard key={c.id} project={project} member={c} index={i} update={update} runJob={runJob} />
       ))}
       <button
         className="btn sm"
         onClick={() =>
-          update((p) =>
-            void p.cast.push({
-              id: `c${Math.random().toString(36).slice(2, 6)}`,
-              name: `キャラ${p.cast.length + 1}`,
-              persona: '',
-              kind: 'builtin',
-              builtin: { shape: 'cat', bodyColor: '#ffffff', emblem: '' },
-              images: {},
-              voice: { voice: 'nova', instructions: '明るく元気な声で、テンポよく。', speed: 1.15 },
-            }),
-          )
+          update((p) => {
+            const m = libraryCastMember(p.cast.some((c) => c.library === 'osushi-chan') ? 'hayami-saki' : 'osushi-chan', `c${Math.random().toString(36).slice(2, 6)}`);
+            p.cast.push(m);
+          })
         }
       >
         ＋ キャラクターを追加
@@ -47,28 +43,31 @@ export const CastPanel: React.FC<{ project: Project; update: Update; runJob: Run
   );
 };
 
-const CastCard: React.FC<{ project: Project; member: CastMember; index: number; update: Update; runJob: RunJob; flush: () => Promise<void> }> = ({
-  project,
-  member: c,
-  index,
-  update,
-  runJob,
-}) => {
+const CastCard: React.FC<{ project: Project; member: CastMember; index: number; update: Update; runJob: RunJob }> = ({ project, member: c, index, update, runJob }) => {
   const meta = useContext(MetaContext)!;
   const set = (fn: (m: CastMember) => void) => update((p) => fn(p.cast[index]));
   const [desc, setDesc] = useState('');
   const [style, setStyle] = useState('anime');
+  const [kind, setKind] = useState<'human' | 'creature'>('human');
   const [poses, setPoses] = useState<Pose[]>([...POSES]);
+  const [refs, setRefs] = useState<string[]>([]);
   const [previewing, setPreviewing] = useState(false);
   const [previewErr, setPreviewErr] = useState<string | null>(null);
   const audio = useRef<HTMLAudioElement | null>(null);
-  const b = c.builtin ?? { shape: 'mochi' as const, bodyColor: '#ffffff', emblem: '' };
+
+  const applyLibrary = (libId: string) =>
+    update((p) => {
+      const cur = p.cast[index];
+      const lib = libraryCastMember(libId, cur.id);
+      p.cast[index] = { ...lib, voice: cur.library === libId ? cur.voice : lib.voice };
+    });
 
   const preview = async () => {
     setPreviewing(true);
     setPreviewErr(null);
     try {
-      const url = await api.ttsPreview(project.scenes.flatMap((s) => s.lines).find((l) => l.speaker === c.id)?.text ?? 'こんにちは！よろしくね！', c.voice);
+      const line = project.scenes.flatMap((s) => s.lines).find((l) => l.speaker === c.id);
+      const url = await api.ttsPreview(line?.speak || line?.text || 'こんにちは！今日はよろしくお願いします！', c.voice, line?.delivery);
       audio.current?.pause();
       audio.current = new Audio(url);
       await audio.current.play();
@@ -77,6 +76,14 @@ const CastCard: React.FC<{ project: Project; member: CastMember; index: number; 
     } finally {
       setPreviewing(false);
     }
+  };
+
+  const setPoseImage = async (pose: Pose, open: boolean, f: File) => {
+    const { path } = await api.upload(project.id, f);
+    set((m) => {
+      if (open) m.imagesOpen = { ...m.imagesOpen, [pose]: path };
+      else m.images = { ...m.images, [pose]: path };
+    });
   };
 
   return (
@@ -95,117 +102,110 @@ const CastCard: React.FC<{ project: Project; member: CastMember; index: number; 
         <Field label="名前">
           <Text value={c.name} onChange={(v) => set((m) => void (m.name = v))} />
         </Field>
-        <Field label="見た目">
-          <Seg
-            value={c.kind}
-            onChange={(v) => set((m) => void (m.kind = v))}
-            options={[
-              { value: 'image', label: '画像' },
-              { value: 'builtin', label: '組み込み' },
-            ]}
-          />
-        </Field>
       </div>
+      <Field label="キャラクター">
+        <div className="chips">
+          {Object.entries(LIBRARY_CHARACTERS).map(([id, lc]) => (
+            <button key={id} className={`chip ${c.library === id ? 'on' : ''}`} onClick={() => (c.library === id ? undefined : applyLibrary(id))}>
+              {lc.name}
+              <span className="faint">（{lc.kind === 'human' ? '人間' : '人外'}）</span>
+            </button>
+          ))}
+          <span className={`chip ${!c.library ? 'on' : ''}`} style={{ cursor: 'default' }}>
+            オリジナル
+          </span>
+        </div>
+      </Field>
       <Field label="キャラ設定（AI台本用）">
         <Text value={c.persona} onChange={(v) => set((m) => void (m.persona = v))} placeholder="例: とぼけたマスコット。視聴者の本音を代弁する" />
       </Field>
 
-      {c.kind === 'builtin' ? (
-        <div className="sub">
-          <div className="row tight">
-            <Field label="形">
-              <Select value={b.shape} onChange={(v) => set((m) => void (m.builtin = { ...b, shape: v }))} options={SHAPES} />
-            </Field>
-            <Field label="体の色">
-              <input className="input" type="color" value={b.bodyColor} onChange={(e) => set((m) => void (m.builtin = { ...b, bodyColor: e.target.value }))} />
-            </Field>
-            <Field label="手足の色">
-              <input
-                className="input"
-                type="color"
-                value={b.accentColor || project.brand.colors.primary}
-                onChange={(e) => set((m) => void (m.builtin = { ...b, accentColor: e.target.value }))}
-              />
-            </Field>
-            <Field label="おなかの文字">
-              <Text value={b.emblem} onChange={(v) => set((m) => void (m.builtin = { ...b, emblem: v.slice(0, 2) }))} />
-            </Field>
-          </div>
+      <div className="label" style={{ marginBottom: 6 }}>
+        表情（上: 口を閉じた画像 / 下: 口を開けた画像 ・ クリックで差し替え）
+      </div>
+      <div className="pose-grid" style={{ marginBottom: 10 }}>
+        {POSES.map((pose) => {
+          const closed = c.images[pose];
+          const open = c.imagesOpen[pose];
+          return (
+            <div key={pose} className="pose" style={{ height: 130, cursor: 'default' }}>
+              <div style={{ display: 'flex', width: '100%', flex: 1, minHeight: 0 }}>
+                <PoseThumb src={closed ? assetUrl(project.id, closed) : undefined} onFile={(f) => setPoseImage(pose, false, f)} />
+                <PoseThumb src={open ? assetUrl(project.id, open) : undefined} onFile={(f) => setPoseImage(pose, true, f)} dim />
+              </div>
+              <span>{POSE_LABELS[pose]}{closed && !open ? '（口パクなし）' : ''}</span>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="sub">
+        <div className="label" style={{ marginBottom: 6 }}>
+          ✨ オリジナルキャラクターをAIで生成
         </div>
-      ) : (
-        <>
-          <div className="label" style={{ marginBottom: 6 }}>
-            表情ごとの画像（クリックで差し替え）
-          </div>
-          <div className="pose-grid" style={{ marginBottom: 10 }}>
-            {POSES.map((pose) => (
-              <PoseSlot
-                key={pose}
-                src={c.images[pose] ? `/files/${project.id}/${c.images[pose]}` : undefined}
-                label={POSE_LABELS[pose]}
-                onFile={async (f) => {
-                  const { path } = await api.upload(project.id, f);
-                  set((m) => void (m.images = { ...m.images, [pose]: path }));
-                }}
-              />
+        <Field label="基準にする画像（任意）" hint="キャラのデザインシートやイラストを入れると、その見た目に合わせて全表情を作ります。無い場合は説明文から作ります">
+          <div className="row center">
+            {refs.map((r) => (
+              <img key={r} src={assetUrl(project.id, r)} alt="" style={{ height: 48, flex: 'none', borderRadius: 6 }} />
             ))}
-          </div>
-          <div className="sub">
-            <div className="label" style={{ marginBottom: 6 }}>
-              ✨ AIでキャラクター画像を生成（gpt-image）
-            </div>
-            <Field hint="髪型・服装・色・小物など。ブランドカラーを入れると統一感が出ます">
-              <Text value={desc} onChange={setDesc} multiline placeholder="例: オレンジのパーカーを着た元気な女の子。茶色のポニーテールにサーモン寿司の髪飾り" />
-            </Field>
-            <div className="row tight">
-              <Field label="タッチ">
-                <Select value={style} onChange={setStyle} options={meta.styles.map((s) => ({ value: s, label: STYLE_LABELS[s] ?? s }))} />
-              </Field>
-            </div>
-            <div className="chips" style={{ marginBottom: 10 }}>
-              {POSES.map((p) => (
-                <button
-                  key={p}
-                  className={`chip ${poses.includes(p) ? 'on' : ''}`}
-                  onClick={() => setPoses((o) => (o.includes(p) ? o.filter((x) => x !== p) : [...o, p]))}
-                  disabled={p === 'default'}
-                >
-                  {POSE_LABELS[p]}
-                </button>
-              ))}
-            </div>
-            <div className="row center">
-              <button
-                className="btn primary sm"
-                style={{ flex: 'none' }}
-                disabled={!meta.openai || !desc.trim()}
-                onClick={() =>
-                  runJob(`「${c.name}」の画像を生成しています`, `/api/projects/${project.id}/cast/${c.id}/generate`, { description: desc, style, poses })
-                }
-              >
-                生成する（{poses.length}枚）
+            <FilePick
+              accept="image/*"
+              onFile={async (f) => {
+                const { path } = await api.upload(project.id, f);
+                setRefs((o) => [...o, path].slice(-2));
+              }}
+            >
+              画像を追加
+            </FilePick>
+            {refs.length ? (
+              <button className="btn sm ghost" onClick={() => setRefs([])}>
+                クリア
               </button>
-              <button
-                className="btn sm"
-                style={{ flex: 'none' }}
-                disabled={!meta.openai || !c.images.default}
-                title="今の「通常」画像のデザインを保ったまま、表情だけを作り直します"
-                onClick={() =>
-                  runJob(`「${c.name}」の表情を生成しています`, `/api/projects/${project.id}/cast/${c.id}/generate`, {
-                    description: desc || c.persona || c.name,
-                    style,
-                    poses: poses.filter((p) => p !== 'default'),
-                    keepBase: true,
-                  })
-                }
-              >
-                「通常」を元に表情だけ生成
-              </button>
-            </div>
-            <div className="faint" style={{ marginTop: 6 }}>1枚目の生成に約40秒、残りの表情は並列で約1分かかります。</div>
+            ) : null}
           </div>
-        </>
-      )}
+        </Field>
+        <Field label="キャラの説明" hint="髪型・服装・色・小物など。ブランドカラーを入れると統一感が出ます">
+          <Text value={desc} onChange={setDesc} multiline placeholder="例: 30代の営業担当の女性。黒髪ショートボブ、グレーのジャケット" />
+        </Field>
+        <div className="row tight">
+          <Field label="種類">
+            <Select value={kind} onChange={setKind} options={[{ value: 'human', label: '人間（全身）' }, { value: 'creature', label: '人外・マスコット' }]} />
+          </Field>
+          <Field label="タッチ">
+            <Select value={style} onChange={setStyle} options={meta.styles.map((s) => ({ value: s, label: STYLE_LABELS[s] ?? s }))} />
+          </Field>
+        </div>
+        <div className="chips" style={{ marginBottom: 10 }}>
+          {POSES.map((p) => (
+            <button
+              key={p}
+              className={`chip ${poses.includes(p) ? 'on' : ''}`}
+              onClick={() => setPoses((o) => (o.includes(p) ? o.filter((x) => x !== p) : [...o, p]))}
+              disabled={p === 'default'}
+            >
+              {POSE_LABELS[p]}
+            </button>
+          ))}
+        </div>
+        <button
+          className="btn primary sm"
+          disabled={!meta.openai || !desc.trim()}
+          onClick={() =>
+            runJob(`「${c.name}」の画像を生成しています（表情×口の開閉）`, `/api/projects/${project.id}/cast/${c.id}/generate`, {
+              description: desc,
+              style,
+              kind,
+              poses,
+              referenceAssets: refs,
+            })
+          }
+        >
+          生成する（{poses.length}表情 × 口閉じ/口開け = {poses.length * 2}枚）
+        </button>
+        <div className="faint" style={{ marginTop: 6 }}>
+          全身画像を高品質で作るため、{poses.length}表情で5〜10分ほどかかります。口以外は口閉じ画像と完全に同じになるので、口パクしても全身がちらつきません。
+        </div>
+      </div>
 
       <div className="sub" style={{ marginTop: 10 }}>
         <div className="label" style={{ marginBottom: 6 }}>
@@ -215,11 +215,11 @@ const CastCard: React.FC<{ project: Project; member: CastMember; index: number; 
           <Field label="ボイス">
             <Select value={c.voice.voice} onChange={(v) => set((m) => void (m.voice.voice = v))} options={meta.voices.map((v) => ({ value: v.id, label: v.label }))} />
           </Field>
-          <Field label="話す速さ">
-            <Slider value={c.voice.speed} min={0.8} max={1.6} step={0.05} onChange={(v) => set((m) => void (m.voice.speed = v))} format={(v) => `×${v.toFixed(2)}`} />
+          <Field label="話速調整" hint="1.0が自然。1.1を超えると不自然になりやすい">
+            <Slider value={c.voice.speed} min={0.9} max={1.2} step={0.01} onChange={(v) => set((m) => void (m.voice.speed = v))} format={(v) => `×${v.toFixed(2)}`} />
           </Field>
         </div>
-        <Field label="話し方の指示" hint="例: 明るく元気なアニメの女の子の声。語尾をはずませて">
+        <Field label="話し方の指示" hint="年齢感・声のトーン・間の取り方など。セリフごとの感情は、シーンの「演技指示」で指定できます">
           <Text value={c.voice.instructions} onChange={(v) => set((m) => void (m.voice.instructions = v))} multiline />
         </Field>
         <div className="row center">
@@ -233,12 +233,11 @@ const CastCard: React.FC<{ project: Project; member: CastMember; index: number; 
   );
 };
 
-const PoseSlot: React.FC<{ src?: string; label: string; onFile: (f: File) => void }> = ({ src, label, onFile }) => {
+const PoseThumb: React.FC<{ src?: string; onFile: (f: File) => void; dim?: boolean }> = ({ src, onFile, dim }) => {
   const ref = useRef<HTMLInputElement>(null);
   return (
-    <div className="pose" onClick={() => ref.current?.click()} title="クリックして画像をアップロード">
-      {src ? <img src={src} alt="" /> : <div className="faint" style={{ margin: 'auto' }}>＋</div>}
-      <span>{label}</span>
+    <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'flex-end', justifyContent: 'center', cursor: 'pointer', opacity: dim && !src ? 0.5 : 1 }} onClick={() => ref.current?.click()}>
+      {src ? <img src={src} alt="" style={{ maxHeight: '100%', maxWidth: '100%', objectFit: 'contain' }} /> : <div className="faint" style={{ margin: 'auto' }}>＋</div>}
       <input
         ref={ref}
         type="file"
@@ -253,4 +252,3 @@ const PoseSlot: React.FC<{ src?: string; label: string; onFile: (f: File) => voi
     </div>
   );
 };
-
