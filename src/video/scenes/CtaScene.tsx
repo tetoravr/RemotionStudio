@@ -1,4 +1,5 @@
 import React from 'react';
+import { Editable } from '../edit/Editable';
 import { AbsoluteFill, Img, interpolate, useCurrentFrame, useVideoConfig } from 'remotion';
 import { clamp, pop, slam } from '../anim';
 import { Background } from '../components/Background';
@@ -37,8 +38,11 @@ export const CtaScene: React.FC<{ scene: SceneOf<'cta'> }> = ({ scene }) => {
   return (
     <AbsoluteFill>
       <Background kind={bg} />
-      <Sparkles from={logoAt + 6} count={12} box={{ x: 0, y: top - 80 * u, w: W, h: 700 * u }} color={dark ? '#fff' : colors.primary} />
+      <Editable id="fx">
+        <Sparkles from={logoAt + 6} count={12} box={{ x: 0, y: top - 80 * u, w: W, h: 700 * u }} color={dark ? '#fff' : colors.primary} />
+      </Editable>
       <div style={{ position: 'absolute', left: 0, right: 0, top, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 34 * u }}>
+        <Editable id="logo" mode="flow" text={brand.logo ? undefined : { target: { type: 'field', field: 'logoText' }, value: logoText }}>
         <div style={{ transform: `scale(${logoScale})`, opacity: interpolate(frame - logoAt, [0, 3], [0, 1], clamp) }}>
           {brand.logo ? (
             <Img src={resolveAsset(brand.logo)!} style={{ maxWidth: W * 0.7, maxHeight: 240 * u, objectFit: 'contain' }} />
@@ -48,6 +52,8 @@ export const CtaScene: React.FC<{ scene: SceneOf<'cta'> }> = ({ scene }) => {
             </div>
           )}
         </div>
+        </Editable>
+        <Editable id="button" mode="flow" text={{ target: { type: 'field', field: 'buttonText' }, value: scene.buttonText }}>
         <div
           style={{
             transform: `scale(${Math.max(0, btnP) * pulse})`,
@@ -77,7 +83,9 @@ export const CtaScene: React.FC<{ scene: SceneOf<'cta'> }> = ({ scene }) => {
             }}
           />
         </div>
+        </Editable>
         {scene.contact ? (
+          <Editable id="contact" mode="flow" text={{ target: { type: 'field', field: 'contact' }, value: scene.contact }}>
           <div
             style={{
               fontFamily: fonts.heading,
@@ -90,12 +98,13 @@ export const CtaScene: React.FC<{ scene: SceneOf<'cta'> }> = ({ scene }) => {
           >
             {scene.contact}
           </div>
+          </Editable>
         ) : null}
         <div style={{ opacity: notesP, textAlign: 'center', display: 'flex', flexDirection: 'column', gap: 6 * u }}>
           {scene.notes.map((n, i) => (
-            <div key={i} style={{ fontFamily: fonts.body, fontWeight: 500, fontSize: (i === 0 ? 28 : 22) * u, color: dark ? 'rgba(255,255,255,0.75)' : 'rgba(20,24,40,0.6)' }}>
-              {n}
-            </div>
+            <Editable key={i} id={`note:${i}`} mode="flow" text={{ target: { type: 'notes', index: i }, value: n }}>
+              <div style={{ fontFamily: fonts.body, fontWeight: 500, fontSize: (i === 0 ? 28 : 22) * u, color: dark ? 'rgba(255,255,255,0.75)' : 'rgba(20,24,40,0.6)' }}>{n}</div>
+            </Editable>
           ))}
         </div>
       </div>

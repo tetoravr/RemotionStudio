@@ -56,6 +56,17 @@ export const SpeechBubble: React.FC<{
   const bw = 5 * u;
   const tailX = Math.min(Math.max(tipX - left, 40 * u), w - 40 * u);
 
+  const r = 26 * u;
+  const a = 22 * u;
+  const x0 = bw / 2;
+  const y0 = bw / 2;
+  const x1 = w - bw / 2;
+  const y1 = h - bw / 2;
+  const tx = Math.min(Math.max(tailX, r + a), w - r - a);
+  const bubblePath =
+    `M${x0 + r} ${y0} H${x1 - r} Q${x1} ${y0} ${x1} ${y0 + r} V${y1 - r} Q${x1} ${y1} ${x1 - r} ${y1} ` +
+    `H${tx + a} L${tx} ${h + tailH} L${tx - a} ${y1} H${x0 + r} Q${x0} ${y1} ${x0} ${y1 - r} V${y0 + r} Q${x0} ${y0} ${x0 + r} ${y0} Z`;
+
   return (
     <div
       style={{
@@ -69,33 +80,21 @@ export const SpeechBubble: React.FC<{
         opacity: outP,
       }}
     >
+      {/* 本体としっぽを1本の輪郭にする（つなぎ目ができず、角も丸くなる） */}
       <svg
-        width={60 * u}
-        height={tailH + bw * 2}
-        style={{
-          position: 'absolute',
-          left: tailX - 30 * u,
-          top: tail === 'down' ? h - bw * 1.5 : -tailH - bw * 0.5,
-          overflow: 'visible',
-          transform: tail === 'up' ? 'scaleY(-1)' : undefined,
-        }}
+        width={w + bw}
+        height={h + tailH + bw * 2}
+        style={{ position: 'absolute', left: -bw / 2, top: tail === 'down' ? -bw / 2 : -tailH - bw * 1.5, overflow: 'visible', transform: tail === 'up' ? 'scaleY(-1)' : undefined }}
       >
-        <path
-          d={`M${8 * u} 0 L${30 * u} ${tailH + bw} L${52 * u} 0`}
-          fill={bg}
-          stroke={border}
-          strokeWidth={bw}
-          strokeLinejoin="round"
-        />
+        <g transform={`translate(${bw / 2} ${bw / 2})`}>
+          <path d={bubblePath} fill="rgba(0,0,0,0.14)" transform={`translate(${6 * u} ${8 * u})`} />
+          <path d={bubblePath} fill={bg} stroke={border} strokeWidth={bw} strokeLinejoin="round" />
+        </g>
       </svg>
       <div
         style={{
           position: 'absolute',
           inset: 0,
-          background: bg,
-          border: `${bw}px solid ${border}`,
-          borderRadius: 26 * u,
-          boxShadow: `${6 * u}px ${8 * u}px 0 rgba(0,0,0,0.14)`,
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
@@ -118,17 +117,6 @@ export const SpeechBubble: React.FC<{
           <RichText text={text} color={fg} highlightColor={variant === 'accent' ? colors.accent : colors.primary} reveal={reveal} />
         </div>
       </div>
-      {/* しっぽと本体の境界線を消す */}
-      <div
-        style={{
-          position: 'absolute',
-          left: tailX - 20 * u,
-          width: 40 * u,
-          top: tail === 'down' ? h - bw : 0,
-          height: bw,
-          background: bg,
-        }}
-      />
     </div>
   );
 };

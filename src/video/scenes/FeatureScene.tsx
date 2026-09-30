@@ -1,4 +1,5 @@
 import React from 'react';
+import { Editable } from '../edit/Editable';
 import { AbsoluteFill, interpolate, useCurrentFrame, useVideoConfig } from 'remotion';
 import { clamp, pop, slam } from '../anim';
 import { Background } from '../components/Background';
@@ -47,9 +48,12 @@ export const FeatureScene: React.FC<{ scene: SceneOf<'feature'> }> = ({ scene })
     <AbsoluteFill>
       <Background kind={bg} center={{ x: 0.5, y: hlCenterY / layout.height }} />
       <Shake at={[k.headAt]} strength={12}>
-        <ImpactRing at={k.headAt} x={layout.width / 2} y={hlCenterY} color={dark ? '#fff' : colors.primary} maxR={420 * u} />
-        <SpeedLines at={k.headAt} x={layout.width / 2} y={hlCenterY} color={dark ? '#fff' : colors.primary} />
+        <Editable id="fx">
+          <ImpactRing at={k.headAt} x={layout.width / 2} y={hlCenterY} color={dark ? '#fff' : colors.primary} maxR={420 * u} />
+          <SpeedLines at={k.headAt} x={layout.width / 2} y={hlCenterY} color={dark ? '#fff' : colors.primary} />
+        </Editable>
         {frame >= k.eyebrowAt ? (
+          <Editable id="eyebrow" text={{ target: { type: 'field', field: 'eyebrow' }, value: scene.eyebrow }}>
           <div style={{ position: 'absolute', left: box.x, width: box.w, top: box.y, transform: `translateX(${ebX}px)`, opacity: Math.min(1, ebP * 1.5) }}>
             <StrokeText
               text={scene.eyebrow}
@@ -61,8 +65,10 @@ export const FeatureScene: React.FC<{ scene: SceneOf<'feature'> }> = ({ scene })
               fontFamily={fonts.heading}
             />
           </div>
+          </Editable>
         ) : null}
         {frame >= k.headAt ? (
+          <Editable id="headline" text={{ target: { type: 'field', field: 'headline' }, value: scene.headline }}>
           <div
             style={{
               position: 'absolute',
@@ -86,8 +92,10 @@ export const FeatureScene: React.FC<{ scene: SceneOf<'feature'> }> = ({ scene })
               shadow={`0 ${10 * u}px 0 ${dark ? 'rgba(0,0,0,0.35)' : shade(colors.primary, 0.6)}`}
             />
           </div>
+          </Editable>
         ) : null}
         {scene.footnote ? (
+          <Editable id="footnote" text={{ target: { type: 'field', field: 'footnote' }, value: scene.footnote }}>
           <div
             style={{
               position: 'absolute',
@@ -104,8 +112,11 @@ export const FeatureScene: React.FC<{ scene: SceneOf<'feature'> }> = ({ scene })
           >
             {scene.footnote}
           </div>
+          </Editable>
         ) : null}
-        <FeatureVisual visual={scene.visual} box={visualBox} startAt={k.visualAt} payoffAt={k.payoffAt} dark={dark} />
+        <Editable id="visual">
+          <FeatureVisual visual={scene.visual} box={visualBox} startAt={k.visualAt} payoffAt={k.payoffAt} dark={dark} />
+        </Editable>
         <SceneCharacters />
         <SceneBubbles />
         <SceneCaptions />

@@ -240,13 +240,16 @@ app.post(
   '/api/projects/:id/narration',
   h(async (req, res) => {
     const id = param(req, 'id');
-    const force = Boolean(req.body?.force);
+    // lineIds を指定すると、そのセリフだけを（変更の有無にかかわらず）作り直す
+    const only = Array.isArray(req.body?.lineIds) ? (req.body.lineIds as unknown[]).map(String) : undefined;
+    const force = Boolean(req.body?.force) || Boolean(only);
     const job = startJob('narration', id, async (ctx) => {
       const project = await loadProject(id);
-      const todo = staleLines(project, force).length;
+      const todo = staleLines(project, force, only).length;
       if (!todo) return { generated: 0 };
       await generateNarration(project, projectDir(id), {
         force,
+        only,
         onProgress: (d, t, m) => ctx.progress(t ? d / t : 1, `ナレーション生成 ${d}/${t} ${m}`),
       });
       // 生成中にエディタで編集された内容を壊さないよう、最新を読み直して音声だけ反映

@@ -1,4 +1,5 @@
 import React from 'react';
+import { Editable } from '../edit/Editable';
 import { AbsoluteFill, interpolate, spring, useCurrentFrame, useVideoConfig } from 'remotion';
 import { bob, clamp, pop } from '../anim';
 import { Background } from '../components/Background';
@@ -42,6 +43,7 @@ export const ShowcaseScene: React.FC<{ scene: SceneOf<'showcase'> }> = ({ scene 
   return (
     <AbsoluteFill>
       <Background kind={bg} />
+      <Editable id="title" text={{ target: { type: 'field', field: 'title' }, value: scene.title }}>
       <div style={{ position: 'absolute', left: layout.text.x, width: layout.text.w, top: titleTop, transform: `scale(${titleP})` }}>
         <StrokeText
           text={scene.title}
@@ -53,7 +55,9 @@ export const ShowcaseScene: React.FC<{ scene: SceneOf<'showcase'> }> = ({ scene 
           fontFamily={fonts.heading}
         />
       </div>
+      </Editable>
       {scene.note ? (
+        <Editable id="note" text={{ target: { type: 'field', field: 'note' }, value: scene.note }}>
         <div
           style={{
             position: 'absolute',
@@ -70,9 +74,11 @@ export const ShowcaseScene: React.FC<{ scene: SceneOf<'showcase'> }> = ({ scene 
         >
           {scene.note}
         </div>
+        </Editable>
       ) : null}
       {frame >= k.visualAt ? (
         scene.screenshot ? (
+          <Editable id="screen">
           <div
             style={{
               position: 'absolute',
@@ -92,6 +98,7 @@ export const ShowcaseScene: React.FC<{ scene: SceneOf<'showcase'> }> = ({ scene 
               scrollDur={scrollDur}
             />
           </div>
+          </Editable>
         ) : (
           // 疑似UIは作らない。スクリーンショット未設定であることを明示（書き出しはエラーで止まる）
           <div

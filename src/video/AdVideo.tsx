@@ -2,6 +2,7 @@ import React, { useMemo } from 'react';
 import { AbsoluteFill, Easing, Freeze, interpolate, Sequence, staticFile, useCurrentFrame, useVideoConfig } from 'remotion';
 import { adaptForFormat } from './adapt';
 import { AudioTrack } from './AudioTrack';
+import { useEditMode } from './edit/Editable';
 import { DiagonalWipe, Flash, WIPE_CUT, WIPE_FRAMES } from './components/Transitions';
 import { sceneKeys } from './events';
 import { useProjectFonts } from './fonts';
@@ -29,7 +30,8 @@ export const makeAssetResolver = (base: string) => (path: string | undefined) =>
 const SceneRenderer: React.FC<{ st: SceneTiming; project: Project }> = ({ st, project }) => {
   const enterOffset = sceneKeys(st, project).enterOffset;
   const s = st.scene;
-  return (
+  const edit = useEditMode();
+  const inner = (
     <SceneContext.Provider value={{ timing: st, enterOffset }}>
       {s.type === 'logo' ? <LogoScene scene={s} /> : null}
       {s.type === 'talk' ? <TalkScene scene={s} /> : null}
@@ -38,6 +40,8 @@ const SceneRenderer: React.FC<{ st: SceneTiming; project: Project }> = ({ st, pr
       {s.type === 'cta' ? <CtaScene scene={s} /> : null}
     </SceneContext.Provider>
   );
+  // 直接調整中のシーンは、登場アニメーションが終わった状態で止めて、全要素を見せる（レイアウトを決めやすくする）
+  return edit?.enabled && edit.activeSceneId === s.id ? <Freeze frame={Math.max(0, st.duration - 1)}>{inner}</Freeze> : inner;
 };
 
 /** slide / zoom: 直前シーンの最終フレームを止めて重ねる */

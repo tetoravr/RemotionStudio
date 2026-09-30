@@ -177,3 +177,25 @@ video.result { width: 100%; max-height: 50vh; background: #000; border-radius: 1
 }
 .btn-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .btn-row.tight { gap: 6px; }
+
+/* 直接調整モード: 映像内は要素（Editable）だけがマウスを受ける。それ以外は素通しにして、空白クリックで選択解除できるようにする */
+[data-edit-canvas='on'] * { pointer-events: none !important; }
+[data-edit-canvas='on'] [data-edit-layer] *,
+[data-edit-canvas='on'] [data-edit-flow],
+[data-edit-canvas='on'] [data-edit-flow] * { pointer-events: auto !important; }
+[data-edit-canvas='on'] [data-edit-layer] [data-edit-frame] { pointer-events: none !important; }
+[data-edit-canvas='on'] [data-edit-layer] [data-edit-frame] [data-edit-ui],
+[data-edit-canvas='on'] [data-edit-flow] [data-edit-frame] [data-edit-ui] { pointer-events: auto !important; }
+[data-edit-canvas='on'] [data-edit-flow] [data-edit-frame] { pointer-events: none !important; }
+
+/* 文字をその場で書き換えている間は、元の文字を隠して入力欄の文字だけを見せる（吹き出しなどの見た目はそのまま） */
+[data-edit-canvas='on'] [data-editing] *:not([data-edit-ui]) {
+  color: transparent !important;
+  -webkit-text-fill-color: transparent !important;
+  -webkit-text-stroke: 0 !important;
+  text-shadow: none !important;
+}
+
+/* 操作ハンドルは映像の外（最前面のオーバーレイ）に描く。枠は素通し、ボタンだけ押せる */
+[data-edit-canvas='on'] [data-edit-overlay] [data-edit-frame] { pointer-events: none !important; }
+[data-edit-canvas='on'] [data-edit-overlay] [data-edit-ui] { pointer-events: auto !important; }

@@ -114,8 +114,27 @@ export const Visual = z.discriminatedUnion('kind', [
 ]);
 export type Visual = z.infer<typeof Visual>;
 
+/** 動画内の要素1つぶんの調整（直接調整で保存される）。移動・拡大縮小・回転・非表示 */
+export const ElementAdjust = z.object({
+  /** 移動量（コンポジション px） */
+  dx: z.number().default(0),
+  dy: z.number().default(0),
+  scale: z.number().min(0.1).max(6).default(1),
+  /** 回転（度） */
+  rotate: z.number().default(0),
+  /** 拡大・回転の中心（コンポジション座標）。未設定なら要素の中心 */
+  px: z.number().optional(),
+  py: z.number().optional(),
+  hidden: z.boolean().optional(),
+  /** 文字の揃え（文字を含む要素のみ） */
+  align: z.enum(['left', 'center', 'right']).optional(),
+});
+export type ElementAdjust = z.infer<typeof ElementAdjust>;
+
 const sceneBase = {
   id: z.string(),
+  /** 要素ID -> 調整。IDは各シーンの Editable と対応（例: headline / char:0 / line:<セリフID>） */
+  layout: z.record(z.string(), ElementAdjust).optional(),
   lines: z.array(Line).default([]),
   characters: z.array(CharacterPlacement).default([]),
   /** このシーンに入る時のトランジション */

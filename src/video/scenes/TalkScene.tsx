@@ -1,4 +1,5 @@
 import React from 'react';
+import { Editable } from '../edit/Editable';
 import { AbsoluteFill, Easing, interpolate, useCurrentFrame, useVideoConfig } from 'remotion';
 import { clamp, pop } from '../anim';
 import { Background } from '../components/Background';
@@ -44,6 +45,7 @@ export const TalkScene: React.FC<{ scene: SceneOf<'talk'> }> = ({ scene }) => {
       <Background kind={bg} />
       <Shake at={scene.prop ? [propLand] : []} strength={10}>
         {scene.showLogo ? (
+          <Editable id="miniLogo" text={{ target: { type: 'brandName' }, value: brand.name }}>
           <div
             style={{
               position: 'absolute',
@@ -59,8 +61,10 @@ export const TalkScene: React.FC<{ scene: SceneOf<'talk'> }> = ({ scene }) => {
           >
             {brand.name.replace(/\n/g, ' ')}
           </div>
+          </Editable>
         ) : null}
         {scene.headline ? (
+          <Editable id="headline" text={{ target: { type: 'field', field: 'headline' }, value: scene.headline }}>
           <div style={{ position: 'absolute', left: layout.text.x, width: layout.text.w, top: headlineTop, transform: `scale(${headP})` }}>
             <StrokeText
               text={scene.headline}
@@ -73,10 +77,16 @@ export const TalkScene: React.FC<{ scene: SceneOf<'talk'> }> = ({ scene }) => {
               shadow={`0 ${8 * u}px 0 rgba(0,0,0,0.12)`}
             />
           </div>
+          </Editable>
         ) : null}
         <SceneCharacters />
-        {scene.decor !== 'none' && g ? <Decor kind={scene.decor} x={Math.min(W - 200 * u, g.x + g.h * 0.55)} y={g.headY - 60 * u} at={k.enterOffset + 8} /> : null}
+        {scene.decor !== 'none' && g ? (
+          <Editable id="decor">
+            <Decor kind={scene.decor} x={Math.min(W - 200 * u, g.x + g.h * 0.55)} y={g.headY - 60 * u} at={k.enterOffset + 8} />
+          </Editable>
+        ) : null}
         {scene.prop && frame >= k.propAt ? (
+          <Editable id="prop" z={10} text={{ target: { type: 'propLabel' }, value: scene.prop.label ?? '' }}>
           <div
             style={{
               position: 'absolute',
@@ -88,6 +98,7 @@ export const TalkScene: React.FC<{ scene: SceneOf<'talk'> }> = ({ scene }) => {
           >
             <PropCard icon={scene.prop.icon} badge={scene.prop.badge} label={scene.prop.label} width={propW} />
           </div>
+          </Editable>
         ) : null}
         <SceneBubbles />
         <SceneCaptions />

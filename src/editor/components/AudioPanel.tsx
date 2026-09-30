@@ -4,8 +4,9 @@ import { api, ttsFor } from '../api';
 import { MetaContext } from '../App';
 import type { RunJob, Update } from '../pages/Editor';
 import { Field, FilePick, Num, Slider, Toggle } from './Fields';
+import { NarrationList } from './NarrationList';
 
-export const AudioPanel: React.FC<{ project: Project; update: Update; runJob: RunJob }> = ({ project, update, runJob }) => {
+export const AudioPanel: React.FC<{ project: Project; update: Update; runJob: RunJob; onSelectScene?: (i: number) => void }> = ({ project, update, runJob, onSelectScene }) => {
   const a = project.audio;
   const meta = useContext(MetaContext)!;
   const tts = ttsFor(meta, a.ttsProvider);
@@ -85,16 +86,10 @@ export const AudioPanel: React.FC<{ project: Project; update: Update; runJob: Ru
           <Slider value={a.narrationVolume} min={0} max={1} onChange={(v) => update((p) => void (p.audio.narrationVolume = v))} />
         </Field>
         <Toggle checked={project.subtitles} onChange={(v) => update((p) => void (p.subtitles = v))} label="全セリフを字幕でも表示（音なし再生対策）" />
-        <div style={{ height: 12 }} />
-        <button
-          className="btn sm"
-          onClick={() =>
-            confirm('すべてのセリフの音声を作り直しますか？') &&
-            runJob('ナレーションを作り直しています', `/api/projects/${project.id}/narration`, { force: true })
-          }
-        >
-          すべての音声を作り直す
-        </button>
+      </div>
+      <div className="section">
+        <div className="section-title">ナレーションの確認・作り直し</div>
+        <NarrationList project={project} runJob={runJob} onSelectScene={onSelectScene} />
       </div>
       <div className="section">
         <div className="section-title">動画</div>

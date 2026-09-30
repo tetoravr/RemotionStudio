@@ -8,6 +8,7 @@ import { LIBRARY_CHARACTERS, libraryCastMember } from '../src/video/library';
 import { parseRich, fitFontSize } from '../src/video/components/RichText';
 import { adaptForFormat } from '../src/video/adapt';
 import { collectSfx } from '../src/video/events';
+import { applyTextTarget, normalizeAdjust, sceneElementIds } from '../src/video/edit/textEdit';
 import { irodoriCaption, isAudioStale, narrationHash, voiceFor } from '../src/video/narrationKey';
 import { Project } from '../src/video/schema';
 import { blankProject, DEFAULT_CAST } from '../src/video/templates';
@@ -206,4 +207,33 @@ test('WAV読み込み: 48kHz float32 ステレオ / 16bit を扱える', () => {
   const i16 = readWavSamples(wav(1, 16, 1, 24000, 50, (b, o) => b.writeInt16LE(16384, o)));
   assert.equal(i16.rate, 24000);
   assert.ok(Math.abs(i16.samples[0] - 0.5) < 1e-4);
+});
+
+test('直接調整: ほぼ初期値の調整は保存しない・非表示は残す', () => {
+  assert.equal(normalizeAdjust({ dx: 0.2, dy: -0.3, scale: 1.001, rotate: 0.01 }), null);
+  const moved = normalizeAdjust({ dx: 12.34, dy: -5, scale: 1.5, rotate: 370, px: 100, py: 200 })!;
+  assert.deepEqual([moved.dx, moved.dy, moved.scale, moved.rotate, moved.px, moved.py], [12.3, -5, 1.5, 10, 100, 200]);
+  assert.equal(normalizeAdjust({ dx: 0, dy: 0, scale: 1, rotate: 0, hidden: true })?.hidden, true);
+  assert.equal(normalizeAdjust({ dx: 0, dy: 0, scale: 99, rotate: 0 })?.scale, 6);
+});
+
+test('直接調整: 文字の書き換えは元データに戻り、調整はスキーマを通る', () => {
+  const p = Project.parse(structuredClone(sample));
+  const talk = p.scenes.find((s) => s.type === 'talk')!;
+  const line = talk.lines[0];
+  line.speak = '読み替え';
+  applyTextTarget(talk, { type: 'line', lineId: line.id }, '新しい文言');
+  assert.equal(line.text, '新しい文言');
+  assert.equal(line.speak, undefined);
+  applyTextTarget(talk, { type: 'field', field: 'headline' }, '新見出し');
+  assert.equal((talk as { headline?: string }).headline, '新見出し');
+  talk.layout = { headline: { dx: 10, dy: 0, scale: 1.2, rotate: 5 } };
+  assert.equal(Project.parse(p).scenes.find((s) => s.id === talk.id)!.layout!.headline.rotate, 5);
+  assert.ok(sceneElementIds(talk).includes(`line:${line.id}`));
+});
+
+test('直接調整: 文字揃えだけの調整も保存される', () => {
+  const a = normalizeAdjust({ dx: 0, dy: 0, scale: 1, rotate: 0, align: 'right' });
+  assert.equal(a?.align, 'right');
+  assert.equal(normalizeAdjust({ dx: 0, dy: 0, scale: 1, rotate: 0 }), null);
 });

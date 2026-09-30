@@ -1,4 +1,5 @@
 import React from 'react';
+import { Editable, useEditMode } from '../edit/Editable';
 import { AbsoluteFill, interpolate, useCurrentFrame } from 'remotion';
 import { clamp, shake } from '../anim';
 import { Character, characterGeometry } from '../components/Character';
@@ -12,19 +13,30 @@ import { useTheme } from '../theme';
 export const SceneCharacters: React.FC = () => {
   const { timing } = useScene();
   const order = { s: 0, m: 1, l: 2, xl: 3 } as const;
-  const list = [...timing.scene.characters].sort((a, b) => order[a.size] - order[b.size]);
+  // 調整の保存先ID（char:<元の並び順>）を保つため、並べ替える前の番号を持たせる
+  const list = timing.scene.characters.map((p, index) => ({ p, index })).sort((a, b) => order[a.p.size] - order[b.p.size]);
   return (
     <AbsoluteFill>
-      {list.map((p, i) => (
-        <Character key={`${p.id}-${i}`} placement={p} zIndex={i} />
+      {list.map(({ p, index }, i) => (
+        <Editable key={`${p.id}-${index}`} id={`char:${index}`} z={i}>
+          <Character placement={p} zIndex={i} />
+        </Editable>
       ))}
     </AbsoluteFill>
   );
 };
 
 /** 話者の頭上に吹き出し。話者がいないセリフは画面中央付近に出す */
+/** 直接調整中は、レイアウトを決めやすいように、時間で出入りする要素も全部出したままにする */
+export const useShowAll = () => {
+  const edit = useEditMode();
+  const { timing } = useScene();
+  return Boolean(edit?.enabled && edit.activeSceneId === timing.scene.id);
+};
+
 export const SceneBubbles: React.FC<{ fallbackY?: number; minTipY?: number }> = ({ fallbackY, minTipY }) => {
   const { timing } = useScene();
+  const showAll = useShowAll();
   const { layout, project } = useTheme();
   const { u, width: W, height: H } = layout;
   return (
@@ -42,17 +54,18 @@ export const SceneBubbles: React.FC<{ fallbackY?: number; minTipY?: number }> = 
           tipY = Math.max(minTipY ?? 0, g.headY + 10 * u);
         }
         return (
+          <Editable key={lt.line.id} id={`line:${lt.line.id}`} text={{ target: { type: 'line', lineId: lt.line.id }, value: lt.line.text }}>
           <SpeechBubble
-            key={lt.line.id}
             text={lt.line.text}
             tipX={tipX}
             tipY={tipY}
             appearAt={Math.max(0, lt.start - 2)}
-            hideAt={lt.visibleUntil < timing.duration ? lt.visibleUntil : undefined}
+            hideAt={!showAll && lt.visibleUntil < timing.duration ? lt.visibleUntil : undefined}
             variant={style === 'bubble-accent' ? 'accent' : 'white'}
             fontSize={layout.portrait ? 54 * u : 50 * u}
             maxWidth={layout.portrait ? W - layout.safe * 2 : W * 0.46}
           />
+          </Editable>
         );
       })}
     </AbsoluteFill>
@@ -63,27 +76,36 @@ export const SceneBubbles: React.FC<{ fallbackY?: number; minTipY?: number }> = 
 export const SceneCaptions: React.FC = () => {
   const frame = useCurrentFrame();
   const { timing } = useScene();
+  const showAll = useShowAll();
   const { layout, colors, fonts, project } = useTheme();
   const { u, width: W, height: H } = layout;
-  const active = timing.lines.find(
-    (lt) => (lt.line.style === 'caption' || project.subtitles) && frame >= lt.start - 1 && frame < Math.min(lt.end + 8, lt.visibleUntil),
-  );
-  if (!active) return null;
-  const fs = fitFontSize(active.line.text, W - layout.safe * 2, layout.portrait ? 60 * u : 54 * u);
-  const o = interpolate(frame, [active.start - 1, active.start + 3], [0, 1], clamp);
+  const isCaption = (lt: (typeof timing.lines)[number]) => lt.line.style === 'caption' || project.subtitles;
+  const active = showAll
+    ? timing.lines.filter(isCaption)
+    : timing.lines.filter((lt) => isCaption(lt) && frame >= lt.start - 1 && frame < Math.min(lt.end + 8, lt.visibleUntil)).slice(0, 1);
   return (
-    <div style={{ position: 'absolute', left: layout.safe, right: layout.safe, top: H * (layout.portrait ? 0.8 : 0.84), zIndex: 30, opacity: o }}>
-      <StrokeText
-        text={active.line.text}
-        fontSize={fs}
-        color="#fff"
-        highlightColor={colors.accent}
-        strokeColor={colors.dark}
-        strokeWidth={9 * u}
-        fontFamily={fonts.heading}
-        shadow={`0 ${6 * u}px 0 rgba(0,0,0,0.25)`}
-      />
-    </div>
+    <>
+      {active.map((lt) => {
+        const fs = fitFontSize(lt.line.text, W - layout.safe * 2, layout.portrait ? 60 * u : 54 * u);
+        const o = showAll ? 1 : interpolate(frame, [lt.start - 1, lt.start + 3], [0, 1], clamp);
+        return (
+          <Editable key={lt.line.id} id={`caption:${lt.line.id}`} z={30} text={{ target: { type: 'line', lineId: lt.line.id }, value: lt.line.text }}>
+            <div style={{ position: 'absolute', left: layout.safe, right: layout.safe, top: H * (layout.portrait ? 0.8 : 0.84), zIndex: 30, opacity: o }}>
+              <StrokeText
+                text={lt.line.text}
+                fontSize={fs}
+                color="#fff"
+                highlightColor={colors.accent}
+                strokeColor={colors.dark}
+                strokeWidth={9 * u}
+                fontFamily={fonts.heading}
+                shadow={`0 ${6 * u}px 0 rgba(0,0,0,0.25)`}
+              />
+            </div>
+          </Editable>
+        );
+      })}
+    </>
   );
 };
 

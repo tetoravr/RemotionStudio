@@ -1,4 +1,5 @@
 import React from 'react';
+import { Editable } from '../edit/Editable';
 import { AbsoluteFill, Img, interpolate, useCurrentFrame, useVideoConfig } from 'remotion';
 import { clamp, slam } from '../anim';
 import { Background } from '../components/Background';
@@ -60,14 +61,23 @@ export const LogoScene: React.FC<{ scene: SceneOf<'logo'> }> = ({ scene }) => {
     <AbsoluteFill>
       <Background kind={scene.background ?? 'burst'} center={{ x: 0.5, y: burstY / H }} />
       <Shake at={[k.logoAt]} strength={16}>
-        {scene.ticker ? <Ticker text={logoText.replace(/\n/g, ' ')} y={tickerY} delay={k.enterOffset} /> : null}
-        <SpeedLines at={k.logoAt} x={W / 2} y={burstY} color="#fff" />
+        {scene.ticker ? (
+          <Editable id="ticker">
+            <Ticker text={logoText.replace(/\n/g, ' ')} y={tickerY} delay={k.enterOffset} />
+          </Editable>
+        ) : null}
+        <Editable id="fx">
+          <SpeedLines at={k.logoAt} x={W / 2} y={burstY} color="#fff" />
+        </Editable>
         {frame >= k.logoAt - 2 ? (
-          <Starburst x={W / 2} y={burstY} radius={radius} progress={burstP} shadow={`0 ${14 * u}px 0 rgba(0,0,0,0.18)`} seed={scene.id}>
-            <div style={{ transform: `scale(${logoScale})`, filter: `blur(${logoBlur}px)`, opacity: logoOpacity }}>{logoLayer}</div>
-          </Starburst>
+          <Editable id="logo" text={brand.logo ? undefined : { target: { type: 'field', field: 'logoText' }, value: logoText }}>
+            <Starburst x={W / 2} y={burstY} radius={radius} progress={burstP} shadow={`0 ${14 * u}px 0 rgba(0,0,0,0.18)`} seed={scene.id}>
+              <div style={{ transform: `scale(${logoScale})`, filter: `blur(${logoBlur}px)`, opacity: logoOpacity }}>{logoLayer}</div>
+            </Starburst>
+          </Editable>
         ) : null}
         {scene.subtitle ? (
+          <Editable id="subtitle" text={{ target: { type: 'field', field: 'subtitle' }, value: scene.subtitle }}>
           <div
             style={{
               position: 'absolute',
@@ -89,9 +99,12 @@ export const LogoScene: React.FC<{ scene: SceneOf<'logo'> }> = ({ scene }) => {
               shadow={`0 ${6 * u}px 0 rgba(0,0,0,0.2)`}
             />
           </div>
+          </Editable>
         ) : null}
         <SceneCharacters />
-        <ConfettiBurst at={k.logoAt} x={W / 2} y={burstY} count={40} seed={scene.id} />
+        <Editable id="confetti">
+          <ConfettiBurst at={k.logoAt} x={W / 2} y={burstY} count={40} seed={scene.id} />
+        </Editable>
         <SceneBubbles minTipY={portrait ? burstY + radius * 1.2 : undefined} />
         <SceneCaptions />
       </Shake>

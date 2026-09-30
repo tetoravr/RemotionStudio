@@ -2,7 +2,9 @@ import { Player, type PlayerRef } from '@remotion/player';
 import React, { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { AdVideo } from '../../video/AdVideo';
 import { isAudioStale } from '../../video/narrationKey';
-import { FORMATS, Project, type Scene, type SceneType } from '../../video/schema';
+import { applyTextTarget, type TextTarget } from '../../video/edit/textEdit';
+import { EditModeProvider, type EditMode } from '../../video/edit/Editable';
+import { FORMATS, Project, type ElementAdjust, type Scene, type SceneType } from '../../video/schema';
 import { newScene, remapCast, SCENE_TYPE_LABELS } from '../../video/templates';
 import { computeTimeline } from '../../video/timeline';
 import { api, ttsFor, waitJob, type Job } from '../api';
@@ -15,7 +17,7 @@ import { RenderDialog } from '../components/RenderDialog';
 import { ReviseDialog } from '../components/ReviseDialog';
 import { SceneInspector } from '../components/SceneInspector';
 
-export type Update = (fn: (draft: Project) => void) => void;
+export type Update = (fn: (draft: Project) => void, opts?: { silent?: boolean }) => void;
 export type RunJob = (label: string, url: string, body?: unknown) => Promise<Job | null>;
 
 const sceneSummary = (s: Scene, brand: string) => {
@@ -65,7 +67,16 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
   const [dialog, setDialog] = useState<'render' | 'revise' | null>(null);
   const [addMenu, setAddMenu] = useState(false);
   const [frame, setFrame] = useState(0);
+  const [editing, setEditing] = useState(false);
+  const [selectedEl, setSelectedEl] = useState<string | null>(null);
+  const boxRef = useRef<HTMLDivElement>(null);
+  const [overlayEl, setOverlayEl] = useState<HTMLDivElement | null>(null);
+  const projectRef = useRef<Project | null>(null);
   const playerRef = useRef<PlayerRef>(null);
+  const editingRef = useRef(false);
+  const selectedRef = useRef<string | null>(null);
+  const activeSceneRef = useRef<Scene | null>(null);
+  const editApi = useRef<EditMode | null>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pending = useRef<Project | null>(null);
   const saving = useRef<Promise<unknown>>(Promise.resolve());
@@ -108,16 +119,19 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
   );
 
   const update: Update = useCallback(
-    (fn) => {
+    (fn, opts) => {
       setProject((prev) => {
         if (!prev) return prev;
         const draft = structuredClone(prev);
         fn(draft);
         const parsed = Project.safeParse(draft);
         const next = parsed.success ? parsed.data : draft;
-        history.current.past.push(prev);
-        if (history.current.past.length > 60) history.current.past.shift();
-        history.current.future = [];
+        // ドラッグ中（silent）は履歴を積まない。操作の開始時に beginGesture で1回だけ積む
+        if (!opts?.silent) {
+          history.current.past.push(prev);
+          if (history.current.past.length > 60) history.current.past.shift();
+          history.current.future = [];
+        }
         schedule(next);
         return next;
       });
@@ -141,9 +155,35 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
   }, [project, schedule]);
 
   useEffect(() => {
+    projectRef.current = project;
+  }, [project]);
+
+  useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement)?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+      // 直接調整: 矢印で1px（Shiftで10px）、Delete で非表示、Esc で選択解除
+      if (editingRef.current && selectedRef.current) {
+        const sc = activeSceneRef.current;
+        const id = selectedRef.current;
+        const step = e.shiftKey ? 10 : 1;
+        const d = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }[e.key] as number[] | undefined;
+        if (sc && d) {
+          e.preventDefault();
+          editApi.current?.beginGesture();
+          const cur = sc.layout?.[id];
+          editApi.current?.commit(sc.id, id, { scale: 1, rotate: 0, ...cur, dx: (cur?.dx ?? 0) + d[0], dy: (cur?.dy ?? 0) + d[1] }, true);
+          return;
+        }
+        if (sc && (e.key === 'Delete' || e.key === 'Backspace')) {
+          e.preventDefault();
+          editApi.current?.beginGesture();
+          editApi.current?.commit(sc.id, id, { dx: 0, dy: 0, scale: 1, rotate: 0, ...sc.layout?.[id], hidden: true }, true);
+          setSelectedEl(null);
+          return;
+        }
+        if (e.key === 'Escape') setSelectedEl(null);
+      }
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z') {
         e.preventDefault();
         if (e.shiftKey) redo();
@@ -214,6 +254,50 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
 
   const inputProps = useMemo(() => (project ? { project, assetBaseUrl: `/files/${project.id}/` } : null), [project]);
 
+  const curIdx = project && timeline ? timeline.scenes.findIndex((st) => frame >= st.start && frame < st.start + st.duration) : -1;
+  const activeSceneId = editing && project && curIdx >= 0 ? project.scenes[curIdx]?.id ?? null : null;
+  const compScale = size.w > 0 ? size.w / fmt.width : 1;
+  // 再生中は毎フレームこのコンポーネントが描き直されるので、値を使い回す（作り直すと映像全体が再描画されて音がとぎれる）
+  const editMode: EditMode = useMemo(() => ({
+    enabled: editing,
+    activeSceneId,
+    compScale,
+    canvas: { w: fmt.width, h: fmt.height },
+    overlay: overlayEl,
+    selectedId: selectedEl,
+    select: setSelectedEl,
+    beginGesture: () => {
+      const cur = projectRef.current;
+      if (!cur) return;
+      history.current.past.push(cur);
+      if (history.current.past.length > 60) history.current.past.shift();
+      history.current.future = [];
+    },
+    commit: (sceneId, id, adjust: ElementAdjust | null, silent) =>
+      update((p) => {
+        const sc = p.scenes.find((x) => x.id === sceneId);
+        if (!sc) return;
+        const layout = { ...(sc.layout ?? {}) };
+        if (adjust) layout[id] = adjust;
+        else delete layout[id];
+        sc.layout = Object.keys(layout).length ? layout : undefined;
+      }, { silent: silent ?? false }),
+    commitText: (sceneId, target: TextTarget, value) =>
+      update((p) => {
+        if (target.type === 'brandName') {
+          p.brand.name = value;
+          return;
+        }
+        const sc = p.scenes.find((x) => x.id === sceneId);
+        if (sc) applyTextTarget(sc, target, value);
+      }),
+    pause: () => playerRef.current?.pause(),
+    getOrigin: () => {
+      const r = boxRef.current?.getBoundingClientRect();
+      return { left: r?.left ?? 0, top: r?.top ?? 0 };
+    },
+  }), [editing, activeSceneId, compScale, fmt.width, fmt.height, selectedEl, overlayEl, update]);
+
   if (loadErr) return <div className="home"><div className="error">{loadErr}</div></div>;
   if (!project || !timeline || !inputProps) return <div className="home muted">読み込み中…</div>;
 
@@ -246,6 +330,12 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
   };
 
   const currentScene = timeline.scenes.findIndex((st) => frame >= st.start && frame < st.start + st.duration);
+  const activeScene = editing && currentScene >= 0 ? project.scenes[currentScene] : null;
+  editingRef.current = editing;
+  selectedRef.current = selectedEl;
+  activeSceneRef.current = activeScene;
+
+  editApi.current = editMode;
 
   return (
     <div className="editor">
@@ -280,6 +370,17 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
           ]}
         />
         <span className="faint">{(timeline.total / project.fps).toFixed(1)}秒</span>
+        <button
+          className={`btn ${editing ? 'primary' : ''}`}
+          onClick={() => {
+            setEditing((v) => !v);
+            setSelectedEl(null);
+            playerRef.current?.pause();
+          }}
+          title="プレビュー上の要素を直接ドラッグ・拡大縮小・回転・削除、ダブルクリックで文字の書き換え"
+        >
+          ✎ 直接調整{editing ? ' ON' : ''}
+        </button>
         <button className="btn" disabled={!meta.openai} onClick={() => setDialog('revise')} title="AIに修正を指示">
           ✨ AIで修正
         </button>
@@ -376,7 +477,14 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
         <div className="stage">
           <div className="player-wrap" ref={stageRef}>
             {size.w > 0 ? (
-              <div className="player-box" style={{ width: size.w, height: size.h }}>
+              <div
+                className="player-box"
+                ref={boxRef}
+                data-edit-canvas={editing ? 'on' : undefined}
+                style={{ width: size.w, height: size.h }}
+                onPointerDown={editing ? () => setSelectedEl(null) : undefined}
+              >
+                <EditModeProvider value={editing ? editMode : null}>
                 <Player
                   ref={playerRef}
                   component={AdVideo}
@@ -386,11 +494,13 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
                   compositionWidth={fmt.width}
                   compositionHeight={fmt.height}
                   style={{ width: size.w, height: size.h }}
-                  controls
-                  clickToPlay
+                  controls={!editing}
+                  clickToPlay={!editing}
                   numberOfSharedAudioTags={24}
                   spaceKeyToPlayOrPause={false}
                 />
+                </EditModeProvider>
+                <div ref={setOverlayEl} data-edit-overlay style={{ position: 'absolute', inset: 0, zIndex: 1000, pointerEvents: 'none' }} />
               </div>
             ) : null}
           </div>
@@ -426,10 +536,10 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
             ))}
           </div>
           <div className="scroll">
-            {tab === 'scene' && selScene ? <SceneInspector project={project} index={sel} update={update} timing={timeline.scenes[sel]} /> : null}
+            {tab === 'scene' && selScene ? <SceneInspector project={project} index={sel} update={update} timing={timeline.scenes[sel]} runJob={runJob} onSelectElement={(id) => { setEditing(true); setSelectedEl(id); playerRef.current?.pause(); }} /> : null}
             {tab === 'brand' ? <BrandPanel project={project} update={update} /> : null}
             {tab === 'cast' ? <CastPanel project={project} update={update} runJob={runJob} flush={flush} /> : null}
-            {tab === 'audio' ? <AudioPanel project={project} update={update} runJob={runJob} /> : null}
+            {tab === 'audio' ? <AudioPanel project={project} update={update} runJob={runJob} onSelectScene={selectScene} /> : null}
           </div>
         </div>
       </div>
