@@ -1,4 +1,6 @@
 import React, { useState } from 'react';
+import { Sparkles } from 'lucide-react';
+import { Ic } from '../icons';
 
 const EXAMPLES = [
   'もっとテンポよく、セリフを短くして',
@@ -14,7 +16,10 @@ export const ReviseDialog: React.FC<{ onClose: () => void; onSubmit: (instructio
   return (
     <div className="modal-bg" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <h3>✨ AIに台本の修正を頼む</h3>
+        <h3>
+          <Ic n={Sparkles} />
+          AIに台本の修正を頼む
+        </h3>
         <div className="muted" style={{ marginBottom: 10 }}>
           構成・セリフ・図解をまとめて書き直します。キャラクター・配色・画像はそのまま残ります。修正後も「元に戻す」で戻せます。
         </div>

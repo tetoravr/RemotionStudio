@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { migrateLayouts } from '../src/video/edit/textEdit';
 import { Project, type ProjectInput } from '../src/video/schema';
 import { config } from './env';
 
@@ -26,7 +27,8 @@ export const loadProject = async (id: string): Promise<Project> => {
   const raw = await fs.readFile(projectFile(id), 'utf8').catch(() => {
     throw Object.assign(new Error('プロジェクトが見つかりません'), { status: 404 });
   });
-  return Project.parse(JSON.parse(raw));
+  // 旧形式の調整（画面の形を区別しない）を、今の画面の形のものとして移す
+  return migrateLayouts(Project.parse(JSON.parse(raw)));
 };
 
 export const saveProject = async (input: ProjectInput): Promise<Project> => {
@@ -47,6 +49,7 @@ export type ProjectSummary = {
   primary: string;
   scenes: number;
   updatedAt?: string;
+  updatedBy?: string;
   thumbnail?: string;
 };
 
@@ -67,6 +70,7 @@ export const listProjects = async (): Promise<ProjectSummary[]> => {
         primary: p.brand.colors.primary,
         scenes: p.scenes.length,
         updatedAt: p.updatedAt,
+        updatedBy: p.updatedBy,
         thumbnail: img ? (img.startsWith('lib:') ? `/${img.slice(4)}` : `/files/${p.id}/${img}`) : undefined,
       });
     } catch {
@@ -77,7 +81,24 @@ export const listProjects = async (): Promise<ProjectSummary[]> => {
 };
 
 export const deleteProject = async (id: string) => {
-  await fs.rm(projectDir(id), { recursive: true, force: true });
+  const dir = projectDir(id);
+  try {
+    // Windows では、動画や音声を他のアプリで開いていると一時的に消せないので、少し待って再試行する
+    await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  } catch (e) {
+    // それでも消せない時は、ゴミ箱フォルダへ移して一覧から外す（ファイルを閉じたあと、次回の起動時に片付ける）
+    const trash = path.join(config.projectsDir, '.trash', `${id}-${Date.now()}`);
+    await fs.mkdir(path.dirname(trash), { recursive: true });
+    await fs.rename(dir, trash).catch(() => {
+      throw Object.assign(new Error(`削除できませんでした。プロジェクトのファイル（書き出した動画など）を他のアプリで開いていないか確認してください。
+${(e as Error).message}`), { status: 409 });
+    });
+  }
+};
+
+/** 前回消せなかったプロジェクトの片付け */
+export const emptyTrash = async () => {
+  await fs.rm(path.join(config.projectsDir, '.trash'), { recursive: true, force: true, maxRetries: 2 }).catch(() => undefined);
 };
 
 export const copyDir = async (from: string, to: string, skip: (name: string) => boolean = () => false) => {

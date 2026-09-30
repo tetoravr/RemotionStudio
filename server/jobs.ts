@@ -49,6 +49,22 @@ export const startJob = (kind: string, projectId: string | undefined, fn: (ctx: 
 };
 
 export const getJob = (id: string) => jobs.get(id);
+/** 同じプロジェクトで同時に動かすと内容を上書きし合う処理の組み合わせ */
+const CONFLICTS: Record<string, string[]> = {
+  revise: ['revise', 'narration', 'illustration', 'character'],
+  narration: ['revise', 'narration'],
+  illustration: ['revise', 'illustration'],
+  character: ['revise', 'character'],
+  render: ['render'],
+};
+const LABELS: Record<string, string> = { revise: 'AIの修正', narration: 'ナレーション生成', illustration: '図解の生成', character: 'キャラ画像の生成', render: '書き出し' };
+
+/** kind の処理を始めてよいか。ダメなら理由を返す */
+export const conflictFor = (projectId: string, kind: string): string | null => {
+  const busy = runningJobs(projectId).find((j) => (CONFLICTS[kind] ?? []).includes(j.kind));
+  return busy ? `このプロジェクトでは「${LABELS[busy.kind] ?? busy.kind}」を実行中です。終わってからもう一度お試しください` : null;
+};
+
 export const runningJobs = (projectId: string) => [...jobs.values()].filter((j) => j.projectId === projectId && j.status === 'running');
 
 /** 直列実行用の簡易ミューテックス（レンダリングは同時に1本まで） */

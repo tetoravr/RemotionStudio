@@ -56,10 +56,17 @@ export const Line = z.object({
   text: z.string(),
   /** 読み上げ用テキスト（難読語をひらがなにする等）。空なら text を読む */
   speak: z.string().optional(),
+  /**
+   * 吹き出しのしっぽ。先端の位置を自動の位置からずらす量（コンポジション px）。
+   * 先端を吹き出しの上下左右どちらに置くかで、しっぽの向きも決まる。hidden でしっぽなし
+   */
+  tail: z.object({ dx: z.number().default(0), dy: z.number().default(0), hidden: z.boolean().optional() }).optional(),
   /** このセリフ中の話者ポーズ */
   pose: Pose.optional(),
   /** 演技指示（声のトーン）。例: 「驚いて」「落ち込んで小声で」「元気よく」 */
   delivery: z.string().optional(),
+  /** Irodori-TTS 用の感情・非言語の絵文字（セリフの前に付けて読み上げる）。例: 😲 😆 🥺 */
+  emoji: z.string().optional(),
   style: z.enum(['bubble', 'bubble-accent', 'caption', 'none']).default('bubble'),
   audio: AudioRef.optional(),
   /** セリフ後の間（秒） */
@@ -108,12 +115,52 @@ export const Visual = z.discriminatedUnion('kind', [
     before: z.object({ icon: IconName, label: z.string() }),
     after: z.object({ icon: IconName, label: z.string() }),
   }),
-  z.object({ kind: z.literal('image'), src: z.string() }),
+  /** 画像（AIで作ったイラストなど）。prompt は作り直し用の指示文。src が空なら未生成 */
+  z.object({ kind: z.literal('image'), src: z.string(), prompt: z.string().optional() }),
+  /** 実際の画面（UIスクリーンショット）。スマホ枠／ブラウザ枠で見せる */
+  z.object({
+    kind: z.literal('screen'),
+    src: z.string(),
+    frame: z.enum(['phone', 'browser']).default('browser'),
+    size: z.object({ w: z.number(), h: z.number() }).optional(),
+  }),
 ]);
 export type Visual = z.infer<typeof Visual>;
 
+/** 動画内の要素1つぶんの調整（直接調整で保存される）。移動・拡大縮小・回転・非表示 */
+export const ElementAdjust = z.object({
+  /** 移動量（コンポジション px） */
+  dx: z.number().default(0),
+  dy: z.number().default(0),
+  scale: z.number().min(0.1).max(6).default(1),
+  /** 回転（度） */
+  rotate: z.number().default(0),
+  /** 拡大・回転の中心（コンポジション座標）。未設定なら要素の中心 */
+  px: z.number().optional(),
+  py: z.number().optional(),
+  hidden: z.boolean().optional(),
+  /** 文字の揃え（文字を含む要素のみ） */
+  align: z.enum(['left', 'center', 'right']).optional(),
+  /** 重なり順（直接調整で最後に触ったものほど大きい＝手前） */
+  z: z.number().int().optional(),
+  /** 吹き出しのしっぽ（吹き出しの要素のみ）。先端を自動の位置からずらす量。hidden でしっぽなし */
+  tail: z.object({ dx: z.number().default(0), dy: z.number().default(0), hidden: z.boolean().optional() }).optional(),
+});
+
+/** 画面の形ごとの要素の調整（縦型で動かしても横型には影響しない） */
+export const SceneLayouts = z.object({
+  vertical: z.record(z.string(), ElementAdjust).optional(),
+  square: z.record(z.string(), ElementAdjust).optional(),
+  horizontal: z.record(z.string(), ElementAdjust).optional(),
+});
+export type ElementAdjust = z.infer<typeof ElementAdjust>;
+
 const sceneBase = {
   id: z.string(),
+  /** 画面の形 -> 要素ID -> 調整。IDは各シーンの Editable と対応（例: headline / char:0 / line:<セリフID>） */
+  layouts: SceneLayouts.optional(),
+  /** 旧形式（画面の形を区別しない調整）。読み込み時に layouts へ移す */
+  layout: z.record(z.string(), ElementAdjust).optional(),
   lines: z.array(Line).default([]),
   characters: z.array(CharacterPlacement).default([]),
   /** このシーンに入る時のトランジション */
@@ -140,7 +187,13 @@ export const TalkScene = z.object({
   decor: z.enum(['none', 'question', 'sparkle', 'sweat', 'heart', 'exclaim']).default('none'),
   /** 話の小道具（落ちてくるアイコン） */
   prop: z
-    .object({ icon: IconName, badge: z.enum(['none', 'ng', 'ok']).default('none'), label: z.string().optional() })
+    .object({
+      icon: IconName,
+      badge: z.enum(['none', 'ng', 'ok']).default('none'),
+      label: z.string().optional(),
+      /** AIで作った（またはアップロードした）図解イラスト。あれば、アイコンのカードの代わりに大きく見せる */
+      image: z.string().optional(),
+    })
     .optional(),
 });
 export const FeatureScene = z.object({
@@ -179,6 +232,9 @@ export type Scene = z.infer<typeof Scene>;
 export type SceneType = Scene['type'];
 export type SceneOf<T extends SceneType> = Extract<Scene, { type: T }>;
 
+/** 話速の既定値。台本の文字数もこの速さを前提に決める */
+export const DEFAULT_VOICE_SPEED = 1.3;
+
 export const CastMember = z.object({
   id: z.string(),
   name: z.string(),
@@ -193,9 +249,17 @@ export const CastMember = z.object({
   /** 表情 -> 口を開けた全身画像（口パク用。口以外は images と同一） */
   imagesOpen: z.partialRecord(Pose, z.string()).default({}),
   voice: z.object({
+    /** OpenAI TTS のボイス名 */
     voice: z.string().default('marin'),
+    /** OpenAI TTS 用の話し方の指示 */
     instructions: z.string().default(''),
-    speed: z.number().min(0.5).max(2).default(1.05),
+    speed: z.number().min(0.5).max(2).default(DEFAULT_VOICE_SPEED),
+    /** Irodori-TTS 用の声のデザイン（キャプション）。例: 「落ち着いた低めの女性の声。丁寧で穏やかな話し方」。空なら instructions を使う */
+    caption: z.string().optional(),
+    /** Irodori-TTS の乱数シード。同じ値なら同じ声になりやすい（キャラごとに固定） */
+    seed: z.number().int().optional(),
+    /** Irodori-TTS サーバーに登録した参照音声の voice ID（声を固定したい時） */
+    refVoice: z.string().optional(),
   }),
 });
 export type CastMember = z.infer<typeof CastMember>;
@@ -223,6 +287,8 @@ export const AudioSettings = z.object({
   sfx: z.boolean().default(true),
   sfxVolume: z.number().min(0).max(1).default(0.6),
   narration: z.boolean().default(true),
+  /** 音声合成エンジン。auto = サーバーの設定（TTS_PROVIDER）に従う */
+  ttsProvider: z.enum(['auto', 'openai', 'irodori']).default('auto'),
   narrationVolume: z.number().min(0).max(2).default(1),
 });
 export type AudioSettings = z.infer<typeof AudioSettings>;
@@ -242,6 +308,8 @@ export const Project = z.object({
   /** AI台本生成時の元ブリーフ（再生成用） */
   brief: z.record(z.string(), z.unknown()).optional(),
   updatedAt: z.string().optional(),
+  /** 最後に編集した人（ログイン時のメールアドレス） */
+  updatedBy: z.string().optional(),
 });
 export type Project = z.infer<typeof Project>;
 export type ProjectInput = z.input<typeof Project>;

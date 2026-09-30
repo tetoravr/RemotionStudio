@@ -49,7 +49,7 @@ export const AudioTrack: React.FC<{ timeline: Timeline }> = ({ timeline }) => {
               .filter((lt) => lt.line.audio)
               .map((lt) => (
                 <Sequence key={`${st.scene.id}-${lt.line.id}`} from={st.start + lt.start} durationInFrames={Math.max(1, lt.end - lt.start + 6)} layout="none">
-                  <Audio src={resolveAsset(lt.line.audio!.src)!} volume={a.narrationVolume} />
+                  <Audio src={resolveAsset(lt.line.audio!.src)!} volume={a.narrationVolume} acceptableTimeShiftInSeconds={1} />
                 </Sequence>
               )),
           )

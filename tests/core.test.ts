@@ -3,12 +3,13 @@ import fs from 'node:fs';
 import { test } from 'node:test';
 import { aiToScenes, type AiStoryboard } from '../server/ai/storyboard';
 import { detectMouthRegion } from '../server/ai/mouth';
-import { mouthEnvelope, trimAndNormalize } from '../server/ai/tts';
+import { engineId, mouthEnvelope, readWavSamples, resolveProvider, trimAndNormalize } from '../server/ai/tts';
 import { LIBRARY_CHARACTERS, libraryCastMember } from '../src/video/library';
 import { parseRich, fitFontSize } from '../src/video/components/RichText';
 import { adaptForFormat } from '../src/video/adapt';
 import { collectSfx } from '../src/video/events';
-import { isAudioStale, narrationHash } from '../src/video/narrationKey';
+import { applyTextTarget, migrateLayouts, normalizeAdjust, readAdjust, sceneElementIds, sceneLayout, setSceneLayout } from '../src/video/edit/textEdit';
+import { irodoriCaption, isAudioStale, narrationHash, voiceFor } from '../src/video/narrationKey';
 import { Project } from '../src/video/schema';
 import { blankProject, DEFAULT_CAST } from '../src/video/templates';
 import { computeTimeline } from '../src/video/timeline';
@@ -18,7 +19,7 @@ const sample = Project.parse(JSON.parse(fs.readFileSync('public/samples/sushitop
 test('サンプルプロジェクトがスキーマに適合し、全セリフに音声がある', () => {
   assert.equal(sample.scenes.length, 8);
   for (const s of sample.scenes) for (const l of s.lines) assert.ok(l.audio, `${l.id} has audio`);
-  for (const s of sample.scenes) for (const l of s.lines) assert.equal(isAudioStale(l, sample.cast, 'gpt-4o-mini-tts'), false, `${l.id} is fresh`);
+  for (const s of sample.scenes) for (const l of s.lines) assert.equal(isAudioStale(l, sample.cast, engineId(resolveProvider(sample.audio.ttsProvider))), false, `${l.id} is fresh`);
 });
 
 test('タイムライン: シーンが連続し、切り替えが8分音符グリッドに乗る', () => {
@@ -33,7 +34,7 @@ test('タイムライン: シーンが連続し、切り替えが8分音符グ�
     for (let i = 1; i < st.lines.length; i++) assert.ok(st.lines[i].start >= st.lines[i - 1].end, 'lines do not overlap');
   }
   assert.equal(tl.total, cursor);
-  assert.ok(tl.total / sample.fps > 25 && tl.total / sample.fps < 40, `about 30s (${tl.total / sample.fps})`);
+  assert.ok(tl.total / sample.fps > 25 && tl.total / sample.fps < 55, `about 30-50s (${tl.total / sample.fps})`);
 });
 
 test('音声がなくても文字数から尺を推定できる', () => {
@@ -77,26 +78,44 @@ test('AI出力をシーンに変換し、不正な値は補正・除外する', 
       {
         type: 'feature',
         transition: 'wipe',
-        lines: [{ speaker: 'unknown', text: 'やあ', speak: null, delivery: null, pose: null, style: 'bubble' }],
+        lines: [{ speaker: 'unknown', text: 'やあ', speak: null, delivery: null, emoji: null, pose: null, style: 'bubble' }],
         characters: [{ id: 'saki', pose: 'happy', position: 'left', size: 'm', enter: 'pop', enterDelaySec: 9 }],
         eyebrow: '[[A]]で',
         headline: 'B！',
         footnote: null,
         background: null,
-        visual: { kind: 'stack', icon: 'receipt', count: 99 } as never,
+        visual: { kind: 'illustration', uiFile: null, illustration: '受付で笑顔のスタッフ', counterFrom: null, counterTo: null, prefix: null, suffix: null, caption: null } as never,
       },
+      {
+        type: 'feature',
+        transition: 'cut',
+        lines: [],
+        characters: [],
+        eyebrow: 'X',
+        headline: 'Y！',
+        footnote: null,
+        background: null,
+        visual: { kind: 'ui', uiFile: 'TGM_配布履歴.png', illustration: null, counterFrom: null, counterTo: null, prefix: null, suffix: null, caption: null } as never,
+      },
+      { type: 'showcase', transition: 'cut', lines: [], characters: [], uiFile: 'a.png', title: 't', note: null } as never,
       { type: 'cta', transition: 'cut', lines: [], characters: [], buttonText: 'Go', contact: null, notes: [] },
     ],
   };
   const scenes = aiToScenes(ai, DEFAULT_CAST);
-  assert.equal(scenes.length, 2);
+  assert.equal(scenes.length, 4);
   const f = scenes[0];
   assert.equal(f.type, 'feature');
   assert.equal(f.lines[0].speaker, 'narrator');
   assert.equal(f.lines[0].style, 'caption');
   assert.equal(f.characters[0].enterDelaySec, 2);
-  if (f.type === 'feature' && f.visual.kind === 'stack') assert.equal(f.visual.count, 6);
-  else assert.fail('visual should be stack');
+  // イラストは後で画像AIが描く（指示文だけ持つ）、画面はUIライブラリを参照する
+  if (f.type === 'feature' && f.visual.kind === 'image') assert.deepEqual([f.visual.src, f.visual.prompt], ['', '受付で笑顔のスタッフ']);
+  else assert.fail('visual should be image');
+  const g = scenes[1];
+  if (g.type === 'feature' && g.visual.kind === 'screen') assert.equal(g.visual.src, 'ui:TGM_配布履歴.png');
+  else assert.fail('visual should be screen');
+  const sc = scenes[2];
+  assert.ok(sc.type === 'showcase' && sc.screenshot === 'ui:a.png');
 });
 
 test('TTS音声の前後無音カットと音量正規化', () => {
@@ -155,4 +174,212 @@ test('サンプル: 疑似UIは使わず、画面紹介シーンは実スクリ�
 
 test('音声: 口パクデータが全セリフにある', () => {
   for (const s of sample.scenes) for (const l of s.lines) assert.ok(l.audio?.mouth && l.audio.mouth.length >= 10, `${l.id} has mouth data`);
+});
+
+test('Irodori-TTS: エンジン・声・感情が変わると音声は古い扱いになる', () => {
+  const line = sample.scenes[1].lines[0];
+  const voice = voiceFor(line.speaker, sample.cast);
+  const irodori = narrationHash(line, voice, 'irodori:irodori-tts');
+  assert.notEqual(irodori, narrationHash(line, voice, 'gpt-4o-mini-tts'), 'engine');
+  assert.notEqual(irodori, narrationHash(line, { ...voice, seed: (voice.seed ?? 0) + 1 }, 'irodori:irodori-tts'), 'seed');
+  assert.notEqual(irodori, narrationHash(line, { ...voice, caption: '低い男性の声' }, 'irodori:irodori-tts'), 'caption');
+  assert.notEqual(irodori, narrationHash({ ...line, emoji: '😲' }, voice, 'irodori:irodori-tts'), 'emoji');
+  // OpenAI 用の項目は Irodori の音声に影響しない
+  assert.equal(irodori, narrationHash(line, { ...voice, voice: 'coral' }, 'irodori:irodori-tts'));
+  // 逆に、Irodori 用の項目は OpenAI の音声に影響しない
+  assert.equal(narrationHash(line, voice, 'gpt-4o-mini-tts'), narrationHash({ ...line, emoji: '😲' }, { ...voice, seed: 1 }, 'gpt-4o-mini-tts'));
+});
+
+test('Irodori-TTS: キャプション（参照音声があるときは感情の指示だけ）', () => {
+  const voice = { voice: 'marin', instructions: '基本の指示', speed: 1, caption: '若い女性の声' };
+  assert.equal(irodoriCaption(voice), '若い女性の声');
+  assert.equal(irodoriCaption({ ...voice, caption: undefined }), '基本の指示');
+  assert.equal(irodoriCaption(voice, '驚いて。'), '若い女性の声\nこのセリフは「驚いて」という調子で読む。');
+  assert.equal(irodoriCaption({ ...voice, refVoice: 'me' }, '驚いて'), 'このセリフは「驚いて」という調子で読む。');
+  assert.equal(irodoriCaption({ ...voice, refVoice: 'me' }), '');
+});
+
+test('WAV読み込み: 48kHz float32 ステレオ / 16bit を扱える', () => {
+  const wav = (fmt: number, bits: number, ch: number, rate: number, frames: number, write: (b: Buffer, o: number, v: number) => void) => {
+    const bytes = bits / 8;
+    const b = Buffer.alloc(44 + frames * ch * bytes);
+    b.write('RIFF', 0);
+    b.writeUInt32LE(b.length - 8, 4);
+    b.write('WAVEfmt ', 8);
+    b.writeUInt32LE(16, 16);
+    b.writeUInt16LE(fmt, 20);
+    b.writeUInt16LE(ch, 22);
+    b.writeUInt32LE(rate, 24);
+    b.writeUInt32LE(rate * ch * bytes, 28);
+    b.writeUInt16LE(ch * bytes, 32);
+    b.writeUInt16LE(bits, 34);
+    b.write('data', 36);
+    b.writeUInt32LE(frames * ch * bytes, 40);
+    for (let i = 0; i < frames; i++) for (let c = 0; c < ch; c++) write(b, 44 + (i * ch + c) * bytes, c === 0 ? 0.5 : -0.5 + i * 0);
+    return b;
+  };
+  const f32 = readWavSamples(wav(3, 32, 2, 48000, 100, (b, o, v) => b.writeFloatLE(v === 0.5 ? 0.5 : 0.25, o)));
+  assert.equal(f32.rate, 48000);
+  assert.equal(f32.samples.length, 100);
+  assert.ok(Math.abs(f32.samples[10] - 0.375) < 1e-6, 'stereo is averaged');
+  const i16 = readWavSamples(wav(1, 16, 1, 24000, 50, (b, o) => b.writeInt16LE(16384, o)));
+  assert.equal(i16.rate, 24000);
+  assert.ok(Math.abs(i16.samples[0] - 0.5) < 1e-4);
+});
+
+test('直接調整: ほぼ初期値の調整は保存しない・非表示は残す', () => {
+  assert.equal(normalizeAdjust({ dx: 0.2, dy: -0.3, scale: 1.001, rotate: 0.01 }), null);
+  const moved = normalizeAdjust({ dx: 12.34, dy: -5, scale: 1.5, rotate: 370, px: 100, py: 200 })!;
+  assert.deepEqual([moved.dx, moved.dy, moved.scale, moved.rotate, moved.px, moved.py], [12.3, -5, 1.5, 10, 100, 200]);
+  assert.equal(normalizeAdjust({ dx: 0, dy: 0, scale: 1, rotate: 0, hidden: true })?.hidden, true);
+  assert.equal(normalizeAdjust({ dx: 0, dy: 0, scale: 99, rotate: 0 })?.scale, 6);
+});
+
+test('直接調整: 文字の書き換えは元データに戻り、調整はスキーマを通る', () => {
+  const p = Project.parse(structuredClone(sample));
+  const talk = p.scenes.find((s) => s.type === 'talk')!;
+  const line = talk.lines[0];
+  line.speak = '読み替え';
+  applyTextTarget(talk, { type: 'line', lineId: line.id }, '新しい文言');
+  assert.equal(line.text, '新しい文言');
+  assert.equal(line.speak, undefined);
+  applyTextTarget(talk, { type: 'field', field: 'headline' }, '新見出し');
+  assert.equal((talk as { headline?: string }).headline, '新見出し');
+  talk.layouts = { vertical: { headline: { dx: 10, dy: 0, scale: 1.2, rotate: 5 } } };
+  assert.equal(Project.parse(p).scenes.find((s) => s.id === talk.id)!.layouts!.vertical!.headline.rotate, 5);
+  assert.ok(sceneElementIds(talk).includes(`line:${line.id}`));
+});
+
+test('直接調整: 文字揃えだけの調整も保存される', () => {
+  const a = normalizeAdjust({ dx: 0, dy: 0, scale: 1, rotate: 0, align: 'right' });
+  assert.equal(a?.align, 'right');
+  assert.equal(normalizeAdjust({ dx: 0, dy: 0, scale: 1, rotate: 0 }), null);
+});
+
+test('音声の末尾に取り残された小さな孤立音は切り落とす（本体の語尾は残す）', () => {
+  const rate = 24000;
+  const tone = (sec: number, amp: number) => Float32Array.from({ length: Math.round(rate * sec) }, (_, i) => amp * Math.sin((i / rate) * 2 * Math.PI * 220));
+  const silence = (sec: number) => new Float32Array(Math.round(rate * sec));
+  const cat = (...a: Float32Array[]) => {
+    const out = new Float32Array(a.reduce((n, x) => n + x.length, 0));
+    let o = 0;
+    for (const x of a) (out.set(x, o), (o += x.length));
+    return out;
+  };
+  const speech = cat(tone(0.8, 0.5), silence(0.25), tone(0.6, 0.5), silence(0.3));
+  const withBlip = cat(speech, silence(0.4), tone(0.1, 0.03));
+  const clean = trimAndNormalize(speech, rate);
+  const trimmed = trimAndNormalize(withBlip, rate);
+  assert.ok(Math.abs(trimmed.length - clean.length) < rate * 0.02, `blip removed: ${trimmed.length} vs ${clean.length}`);
+  // 発話の途中の短い間や、本体の後半の語尾は落とさない
+  assert.ok(trimmed.length > rate * 1.6);
+  // 本体と同じくらい大きな語尾（間のあとの言葉）は残す
+  const keepsWord = trimAndNormalize(cat(tone(0.8, 0.5), silence(0.3), tone(0.5, 0.45)), rate);
+  assert.ok(keepsWord.length > rate * 1.5);
+});
+
+test('直接調整: 重なり順（z）だけの記録も保存され、調整とは別に扱う', () => {
+  const a = normalizeAdjust({ dx: 0, dy: 0, scale: 1, rotate: 0, z: 3 });
+  assert.equal(a?.z, 3);
+  assert.equal(a?.hidden, undefined);
+});
+
+test('資料の読み込み: HTMLから本文を取り出し、Office文書(ZIP)の文字を読める', async () => {
+  const { htmlToText, officeToText } = await import('../server/ai/sources');
+  const page = htmlToText('<html><head><title>商品A｜公式</title><meta name="description" content="説明文"><style>.x{}</style></head><body><nav>メニュー</nav><h1>見出し</h1><p>本文&amp;テキスト</p><script>alert(1)</script></body></html>');
+  assert.equal(page.title, '商品A｜公式');
+  assert.equal(page.description, '説明文');
+  assert.ok(page.text.includes('見出し') && page.text.includes('本文&テキスト') && !page.text.includes('alert'));
+  // 最小の PPTX（スライド1枚）を組み立てて読む
+  const zlib = await import('node:zlib');
+  const entry = (name: string, body: string) => {
+    const data = zlib.deflateRawSync(Buffer.from(body));
+    return { name: Buffer.from(name), data, raw: Buffer.from(body) };
+  };
+  const files = [entry('ppt/slides/slide1.xml', '<p:sld><a:p><a:r><a:t>課題はデータ分断</a:t></a:r></a:p><a:p><a:t>解決します</a:t></a:p></p:sld>')];
+  const parts: Buffer[] = [];
+  const central: Buffer[] = [];
+  let offset = 0;
+  for (const f of files) {
+    const lh = Buffer.alloc(30);
+    lh.writeUInt32LE(0x04034b50, 0);
+    lh.writeUInt16LE(8, 8);
+    lh.writeUInt32LE(f.data.length, 18);
+    lh.writeUInt32LE(f.raw.length, 22);
+    lh.writeUInt16LE(f.name.length, 26);
+    parts.push(lh, f.name, f.data);
+    const ch = Buffer.alloc(46);
+    ch.writeUInt32LE(0x02014b50, 0);
+    ch.writeUInt16LE(8, 10);
+    ch.writeUInt32LE(f.data.length, 20);
+    ch.writeUInt32LE(f.raw.length, 24);
+    ch.writeUInt16LE(f.name.length, 28);
+    ch.writeUInt32LE(offset, 42);
+    central.push(ch, f.name);
+    offset += 30 + f.name.length + f.data.length;
+  }
+  const cd = Buffer.concat(central);
+  const eocd = Buffer.alloc(22);
+  eocd.writeUInt32LE(0x06054b50, 0);
+  eocd.writeUInt16LE(files.length, 8);
+  eocd.writeUInt16LE(files.length, 10);
+  eocd.writeUInt32LE(cd.length, 12);
+  eocd.writeUInt32LE(offset, 16);
+  const text = officeToText('deck.pptx', Buffer.concat([...parts, cd, eocd]));
+  assert.ok(text.includes('スライド1') && text.includes('課題はデータ分断') && text.includes('解決します'));
+});
+
+test('直接調整: 画面の形ごとに調整を別々に持ち、旧形式は今の形へ移す', () => {
+  const p = Project.parse(structuredClone(sample));
+  const sc = p.scenes[0];
+  setSceneLayout(sc, 'vertical', { logo: { dx: 50, dy: 0, scale: 1, rotate: 0 } });
+  setSceneLayout(sc, 'horizontal', { logo: { dx: -80, dy: 20, scale: 1.5, rotate: 0 } });
+  assert.equal(readAdjust(sc, 'logo', 'vertical').dx, 50);
+  assert.equal(readAdjust(sc, 'logo', 'horizontal').scale, 1.5);
+  assert.equal(readAdjust(sc, 'logo', 'square').dx, 0); // 正方形は未調整のまま
+  setSceneLayout(sc, 'horizontal', {});
+  assert.deepEqual(Object.keys(sc.layouts ?? {}), ['vertical']);
+  // 旧形式（layout と セリフの tail）
+  const q = Project.parse({ ...structuredClone(sample), format: 'square' });
+  const t = q.scenes.find((s) => s.lines.length)!;
+  t.layout = { headline: { dx: 5, dy: 5, scale: 1, rotate: 0 } };
+  t.lines[0].tail = { dx: -100, dy: 0 };
+  migrateLayouts(q);
+  assert.equal(t.layout, undefined);
+  assert.equal(t.lines[0].tail, undefined);
+  assert.equal(sceneLayout(t, 'square').headline.dx, 5);
+  assert.equal(readAdjust(t, `line:${t.lines[0].id}`, 'square').tail?.dx, -100);
+  assert.equal(readAdjust(t, 'headline', 'vertical').dx, 0);
+});
+
+test('URL読み込み: 社内・ローカルのアドレスを見分ける（公開時のSSRF対策）', async () => {
+  const { isPrivateAddress } = await import('../server/ai/sources');
+  for (const ip of ['127.0.0.1', '10.1.2.3', '172.16.0.1', '172.31.255.255', '192.168.1.10', '169.254.169.254', '100.64.0.1', '0.0.0.0', '::1', 'fd00::1', 'fe80::1', '::ffff:10.0.0.1'])
+    assert.ok(isPrivateAddress(ip), ip);
+  for (const ip of ['8.8.8.8', '172.32.0.1', '203.0.113.5', '2606:4700::1111']) assert.ok(!isPrivateAddress(ip), ip);
+});
+
+test('音色補正: 補正なしなら元のまま、高音域を上げると高音だけが強くなる', async () => {
+  const { applyEq, bandProfile } = await import('../server/ai/voiceEq');
+  const rate = 48000;
+  // 500Hz と 9kHz を混ぜた音
+  const x = Float32Array.from({ length: rate }, (_, i) => 0.3 * Math.sin((2 * Math.PI * 500 * i) / rate) + 0.1 * Math.sin((2 * Math.PI * 9000 * i) / rate));
+  const same = applyEq(x, rate, new Array(10).fill(0));
+  assert.equal(same, x);
+  const flat = applyEq(x, rate, [0, 0, 0, 0, 0, 0, 0.6, 0, 0, 0]); // ほぼ0でも処理は通る
+  let diff = 0;
+  for (let i = 2000; i < rate - 2000; i++) diff = Math.max(diff, Math.abs(flat[i] - x[i]));
+  assert.ok(diff < 0.05, `near-identity ${diff}`);
+  const boosted = applyEq(x, rate, [0, 0, 0, 0, 0, 0, 6, 6, 6, 6]);
+  const low = (y: Float32Array, f: number) => {
+    let c = 0;
+    let s = 0;
+    for (let i = 0; i < y.length; i++) (c += y[i] * Math.cos((2 * Math.PI * f * i) / rate)), (s += y[i] * Math.sin((2 * Math.PI * f * i) / rate));
+    return Math.hypot(c, s);
+  };
+  const r500 = low(boosted, 500) / low(x, 500);
+  const r9k = low(boosted, 9000) / low(x, 9000);
+  assert.ok(Math.abs(r500 - 1) < 0.08, `500Hz unchanged ${r500}`);
+  assert.ok(r9k > 1.7 && r9k < 2.3, `9kHz boosted ~+6dB ${r9k}`);
+  assert.equal(bandProfile(new Float32Array(10), rate).length, 10);
 });

@@ -58,6 +58,9 @@ button { font: inherit; }
 .row.tight { gap: 6px; }
 .row.center { align-items: center; }
 .spacer { flex: 1; }
+.voice-actions { flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.voice-actions > *, .voice-cand > .btn, .voice-cand > .faint { flex: 0 0 auto; white-space: nowrap; }
+.voice-cand { flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
 .muted { color: var(--muted); }
 .faint { color: var(--faint); font-size: 12px; }
 
@@ -174,3 +177,36 @@ video.result { width: 100%; max-height: 50vh; background: #000; border-radius: 1
 }
 .btn-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .btn-row.tight { gap: 6px; }
+
+/* 直接調整モード: 映像内は要素（Editable）だけがマウスを受ける。それ以外は素通しにして、空白クリックで選択解除できるようにする */
+[data-edit-canvas='on'] * { pointer-events: none !important; }
+[data-edit-canvas='on'] [data-edit-layer] *,
+[data-edit-canvas='on'] [data-edit-flow],
+[data-edit-canvas='on'] [data-edit-flow] * { pointer-events: auto !important; }
+[data-edit-canvas='on'] [data-edit-layer] [data-edit-frame] { pointer-events: none !important; }
+[data-edit-canvas='on'] [data-edit-layer] [data-edit-frame] [data-edit-ui],
+[data-edit-canvas='on'] [data-edit-flow] [data-edit-frame] [data-edit-ui] { pointer-events: auto !important; }
+[data-edit-canvas='on'] [data-edit-flow] [data-edit-frame] { pointer-events: none !important; }
+
+/* 文字をその場で書き換えている間は、元の文字を隠して入力欄の文字だけを見せる（吹き出しなどの見た目はそのまま） */
+[data-edit-canvas='on'] [data-editing] *:not([data-edit-ui]) {
+  color: transparent !important;
+  -webkit-text-fill-color: transparent !important;
+  -webkit-text-stroke: 0 !important;
+  text-shadow: none !important;
+}
+
+/* 操作ハンドルは映像の外（最前面のオーバーレイ）に描く。枠は素通し、ボタンだけ押せる */
+[data-edit-canvas='on'] [data-edit-overlay] [data-edit-frame] { pointer-events: none !important; }
+[data-edit-canvas='on'] [data-edit-overlay] [data-edit-ui] { pointer-events: auto !important; }
+
+/* プレビュー / 直接調整のモード切替 */
+.modebar { display: flex; align-items: center; gap: 12px; padding: 8px 14px; border-bottom: 1px solid var(--border); background: var(--panel); min-height: 44px; }
+.modebar.edit { background: #241b4d; border-bottom-color: #7c5cff; }
+.mode-seg { display: inline-flex; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 2px; gap: 2px; flex: none; }
+.mode-seg button { display: inline-flex; align-items: center; background: transparent; border: 0; color: var(--muted); padding: 6px 12px; border-radius: 6px; cursor: pointer; font-weight: 700; font-size: 12px; white-space: nowrap; }
+.mode-seg button.on { background: var(--panel-3); color: var(--text); }
+.modebar.edit .mode-seg button.on { background: #7c5cff; color: #fff; }
+.mode-hint { flex: 1; min-width: 0; font-size: 12px; color: var(--muted); line-height: 1.4; }
+.modebar.edit .mode-hint { color: #d9d0ff; }
+.stage.editing .player-box { outline: 3px solid #7c5cff; outline-offset: 0; box-shadow: 0 0 0 8px rgba(124, 92, 255, .22), 0 20px 60px rgba(0,0,0,.5); }

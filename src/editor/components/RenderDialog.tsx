@@ -2,6 +2,8 @@ import React, { useEffect, useState } from 'react';
 import { FORMATS, type Project } from '../../video/schema';
 import { api, waitJob, type Job } from '../api';
 import { Progress } from './Fields';
+import { Download } from 'lucide-react';
+import { Ic } from '../icons';
 
 type RenderItem = { name: string; url: string; size: number; at: number };
 
@@ -61,7 +63,7 @@ export const RenderDialog: React.FC<{ project: Project; onClose: () => void; sta
             <video className="result" src={result} controls autoPlay />
             <div className="row" style={{ marginTop: 10, justifyContent: 'flex-end' }}>
               <a className="btn primary" style={{ flex: 'none', textDecoration: 'none' }} href={result} download>
-                ⬇ ダウンロード
+                <Ic n={Download} />ダウンロード
               </a>
             </div>
           </div>

@@ -8,17 +8,34 @@ import { blankProject, DEFAULT_CAST } from '../src/video/templates';
 import { LIBRARY_CHARACTERS } from '../src/video/library';
 import { STYLE_PRESETS } from './ai/images';
 import { attachScreenshots, generateStoryboard, reviseStoryboard, type Brief, type ScreenshotRef } from './ai/storyboard';
-import { OPENAI_VOICES, synthesizeToFile } from './ai/tts';
+import { resolveMedia } from './ai/media';
+import { draftBrief } from './ai/sources';
+import { loadUiLibrary } from './ai/uiLibrary';
+import { candidateFile, createCandidate, deleteVoice, localVoiceFile, localVoices, registerVoice } from './ai/voices';
+import { engineId, irodoriStatus, OPENAI_VOICES, resolveProvider, synthesizeToFile } from './ai/tts';
 import { generateCharacter, type CharacterRequest } from './characters';
 import { config, hasOpenAI, ROOT } from './env';
-import { getJob, runningJobs, startJob } from './jobs';
+import { conflictFor, getJob, runningJobs, startJob } from './jobs';
 import { generateNarration, staleLines } from './narration';
 import {
-  deleteProject, duplicateProject, listProjects, loadProject, newProjectId, projectDir, saveAsset, saveProject, seedSamples,
+  deleteProject, duplicateProject, emptyTrash, listProjects, loadProject, newProjectId, projectDir, saveAsset, saveProject, seedSamples,
 } from './projects';
-import { renderProject } from './render';
+import { renderProject, withFileServer } from './render';
+import { authEnabled, authProblems, authRouter, currentUser, requireLogin } from './auth';
 
 const app = express();
+// リバースプロキシ（Cloudflare Tunnel・ロードバランサ等）の内側で動かす時に、https やクライアントIPを正しく扱う
+app.set('trust proxy', 1);
+app.disable('x-powered-by');
+app.use((_req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Referrer-Policy', 'same-origin');
+  next();
+});
+app.get('/healthz', (_req, res) => res.json({ ok: true }));
+app.use(authRouter());
+// ここから下は、ログインが必要（Google ログインを設定した時だけ有効）
+app.use(requireLogin);
 app.use(express.json({ limit: '10mb' }));
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 60 * 1024 * 1024 } });
 
@@ -27,10 +44,17 @@ const h = (fn: Handler) => (req: Request, res: Response, next: NextFunction) => 
 const param = (req: Request, key: string) => String(req.params[key]);
 
 // ---------- メタ情報 ----------
-app.get('/api/meta', (_req, res) => {
+app.get('/api/meta', async (_req, res) => {
+  const irodori = await irodoriStatus();
   res.json({
     openai: hasOpenAI(),
     models: config.models,
+    tts: {
+      /** 環境設定（TTS_PROVIDER）で解決した既定のエンジン */
+      default: resolveProvider('auto'),
+      engines: { openai: engineId('openai'), irodori: engineId('irodori') },
+      irodori,
+    },
     voices: OPENAI_VOICES,
     icons: ICON_NAMES,
     poses: POSES,
@@ -65,14 +89,21 @@ app.put(
       res.status(400).json({ error: 'プロジェクトの形式が正しくありません', issues: parsed.error.issues.slice(0, 5) });
       return;
     }
-    res.json(await saveProject(parsed.data));
+    // 誰が最後に編集したか（ログイン時のみ）
+    const user = currentUser(req);
+    res.json(await saveProject({ ...parsed.data, updatedBy: user?.email ?? parsed.data.updatedBy }));
   }),
 );
 
 app.delete(
   '/api/projects/:id',
   h(async (req, res) => {
-    await deleteProject(param(req, 'id'));
+    const id = param(req, 'id');
+    if (runningJobs(id).length) {
+      res.status(409).json({ error: 'このプロジェクトは処理中です（音声生成・書き出しなど）。終わってから削除してください' });
+      return;
+    }
+    await deleteProject(id);
     res.json({ ok: true });
   }),
 );
@@ -160,7 +191,9 @@ app.post(
     const job = startJob('storyboard', undefined, async (ctx) => {
       ctx.progress(0.1, 'AIが台本を書いています（30〜60秒）');
       const cast = DEFAULT_CAST.map((c) => structuredClone(c));
-      const { ai, scenes: rawScenes } = await generateStoryboard(brief, cast, format, screenshots.length);
+      // 製品のUI画面集（SUSHI UI フォルダなど）を読み込み、台本AIに選ばせる
+      const uiLib = await loadUiLibrary().catch(() => []);
+      const { ai, scenes: rawScenes } = await generateStoryboard(brief, cast, format, screenshots.map((s) => s.name || s.staged), uiLib);
       const id = newProjectId(brief.productName);
       const shots: ScreenshotRef[] = [];
       for (const sh of screenshots) shots.push(await adoptStaged(id, sh.staged));
@@ -186,8 +219,33 @@ app.post(
         scenes,
         brief,
       });
+      // 製品画面の取り込みと、図解・イラストの生成（失敗しても台本はそのまま使える）
+      await resolveMedia(project, (n, d) => saveAsset(project.id, n, d), { onProgress: (p, m) => ctx.progress(0.5 + p * 0.5, m) }).catch(() => null);
+      await saveProject(project);
       return { projectId: project.id };
     });
+    res.json({ jobId: job.id });
+  }),
+);
+
+/** URL・資料から、ブリーフ（商品情報）の下書きを作る。ウィザードの入力欄を埋めるのに使う */
+app.post(
+  '/api/ai/brief-from-sources',
+  upload.array('files', 10),
+  h(async (req, res) => {
+    const urls = String(req.body?.urls ?? '')
+      .split(/[\s,]+/)
+      .map((s) => s.trim())
+      .filter((s) => /^https?:\/\//i.test(s));
+    const files = ((req.files as Express.Multer.File[] | undefined) ?? []).map((f) => ({
+      name: Buffer.from(f.originalname, 'latin1').toString('utf8'),
+      data: f.buffer,
+    }));
+    if (!urls.length && !files.length) {
+      res.status(400).json({ error: 'URLか資料ファイルを指定してください' });
+      return;
+    }
+    const job = startJob('brief', undefined, (ctx) => draftBrief({ urls, files, hint: String(req.body?.hint ?? '') }, (p, m) => ctx.progress(p, m)));
     res.json({ jobId: job.id });
   }),
 );
@@ -200,6 +258,20 @@ const carryOverAudio = (before: Project, after: Project) => {
 };
 
 /** AI改稿後も、画面紹介シーンには元のスクリーンショットを順番に割り当て直す（足りなければそのシーンは外す） */
+/** 改稿後も、同じ内容のイラストは描き直さない（課題の図解はラベルが同じなら、特徴のイラストは指示文が同じなら使い回す） */
+const keepIllustrations = (before: Project, after: Project) => {
+  const props = new Map<string, string>();
+  const feats = new Map<string, string>();
+  for (const s of before.scenes) {
+    if (s.type === 'talk' && s.prop?.image) props.set(`${s.prop.label ?? ''}|${s.headline ?? ''}`, s.prop.image);
+    if (s.type === 'feature' && s.visual.kind === 'image' && s.visual.src && s.visual.prompt) feats.set(s.visual.prompt, s.visual.src);
+  }
+  for (const s of after.scenes) {
+    if (s.type === 'talk' && s.prop && !s.prop.image) s.prop.image = props.get(`${s.prop.label ?? ''}|${s.headline ?? ''}`);
+    if (s.type === 'feature' && s.visual.kind === 'image' && !s.visual.src && s.visual.prompt) s.visual.src = feats.get(s.visual.prompt) ?? '';
+  }
+};
+
 const keepScreenshots = (before: Project, scenes: Project['scenes']) => {
   const shots = before.scenes.flatMap((s) => (s.type === 'showcase' && s.screenshot ? [{ path: s.screenshot, size: s.screenshotSize }] : []));
   return attachScreenshots(scenes, shots);
@@ -214,13 +286,20 @@ app.post(
       res.status(400).json({ error: '修正指示を入力してください' });
       return;
     }
+    const busy = conflictFor(id, 'revise');
+    if (busy) {
+      res.status(409).json({ error: busy });
+      return;
+    }
     const job = startJob('revise', id, async (ctx) => {
       ctx.progress(0.1, 'AIが台本を修正しています');
       const project = await loadProject(id);
-      const { ai, scenes } = await reviseStoryboard(project, instruction);
+      const { ai, scenes } = await reviseStoryboard(project, instruction, await loadUiLibrary().catch(() => []));
       const next: Project = { ...project, title: ai.title || project.title, brand: { ...project.brand, tagline: ai.tagline || project.brand.tagline }, scenes };
       carryOverAudio(project, next);
       next.scenes = keepScreenshots(project, next.scenes);
+      keepIllustrations(project, next);
+      await resolveMedia(next, (n, d) => saveAsset(id, n, d), { onProgress: (p, m) => ctx.progress(0.5 + p * 0.5, m) }).catch(() => null);
       await saveProject(next);
       return { projectId: id };
     });
@@ -232,13 +311,21 @@ app.post(
   '/api/projects/:id/narration',
   h(async (req, res) => {
     const id = param(req, 'id');
-    const force = Boolean(req.body?.force);
+    // lineIds を指定すると、そのセリフだけを（変更の有無にかかわらず）作り直す
+    const only = Array.isArray(req.body?.lineIds) ? (req.body.lineIds as unknown[]).map(String) : undefined;
+    const force = Boolean(req.body?.force) || Boolean(only);
+    const busy = conflictFor(id, 'narration');
+    if (busy) {
+      res.status(409).json({ error: busy });
+      return;
+    }
     const job = startJob('narration', id, async (ctx) => {
       const project = await loadProject(id);
-      const todo = staleLines(project, force).length;
+      const todo = staleLines(project, force, only).length;
       if (!todo) return { generated: 0 };
       await generateNarration(project, projectDir(id), {
         force,
+        only,
         onProgress: (d, t, m) => ctx.progress(t ? d / t : 1, `ナレーション生成 ${d}/${t} ${m}`),
       });
       // 生成中にエディタで編集された内容を壊さないよう、最新を読み直して音声だけ反映
@@ -259,6 +346,11 @@ app.post(
     const body = req.body as Omit<CharacterRequest, 'castId'>;
     if (!body?.description?.trim()) {
       res.status(400).json({ error: 'キャラクターの説明を入力してください' });
+      return;
+    }
+    const busy = conflictFor(id, 'character');
+    if (busy) {
+      res.status(409).json({ error: busy });
       return;
     }
     const job = startJob('character', id, async (ctx) => {
@@ -294,14 +386,136 @@ app.post(
 app.post(
   '/api/tts/preview',
   h(async (req, res) => {
-    const { text = 'こんにちは！よろしくね！', voice, delivery } = req.body ?? {};
+    const { text = 'こんにちは！よろしくね！', voice, delivery, emoji, provider } = req.body ?? {};
     const tmp = path.join(config.projectsDir, `.tts-preview-${Date.now()}.wav`);
     try {
-      await synthesizeToFile(String(text).slice(0, 200), voice ?? DEFAULT_CAST[0].voice, tmp, delivery || undefined);
+      await synthesizeToFile(String(text).slice(0, 200), voice ?? DEFAULT_CAST[0].voice, tmp, {
+        delivery: delivery || undefined,
+        emoji: emoji || undefined,
+        provider: resolveProvider(['openai', 'irodori'].includes(provider) ? provider : 'auto'),
+      });
       res.type('audio/wav').send(fs.readFileSync(tmp));
     } finally {
       fs.rmSync(tmp, { force: true });
     }
+  }),
+);
+
+/** 課題シーンの図解を作る（sceneIds 指定でそのシーンだけ作り直す） */
+app.post(
+  '/api/projects/:id/illustrations',
+  h(async (req, res) => {
+    const id = param(req, 'id');
+    const sceneIds = Array.isArray(req.body?.sceneIds) ? (req.body.sceneIds as unknown[]).map(String) : undefined;
+    const busy = conflictFor(id, 'illustration');
+    if (busy) {
+      res.status(409).json({ error: busy });
+      return;
+    }
+    const job = startJob('illustration', id, async (ctx) => {
+      const project = await loadProject(id);
+      const r = await resolveMedia(project, (n, d) => saveAsset(id, n, d), { sceneIds, onProgress: (p, m) => ctx.progress(p, m) });
+      if (r.errors.length) throw new Error(`図解の生成に失敗しました: ${r.errors[0]}`);
+      // 生成中の編集を壊さないよう、最新を読み直して画像だけ反映
+      const latest = await loadProject(id);
+      for (const s of latest.scenes) {
+        const made = project.scenes.find((x) => x.id === s.id);
+        if (s.type === 'talk' && s.prop && made?.type === 'talk' && made.prop?.image) s.prop.image = made.prop.image;
+        if (s.type === 'feature' && made?.type === 'feature' && made.visual.kind === 'image' && s.visual.kind === 'image') s.visual.src = made.visual.src;
+      }
+      await saveProject(latest);
+      return r;
+    });
+    res.json({ jobId: job.id });
+  }),
+);
+
+// ---------- 参照音声（声の固定） ----------
+/** Voice Design で声の候補を1本つくる（seed を変えるたびに別の声になる） */
+app.post(
+  '/api/tts/voice-candidates',
+  h(async (req, res) => {
+    const { caption = '', text, seed } = req.body ?? {};
+    const sample = String(text ?? '').trim().slice(0, 200);
+    if (!sample) {
+      res.status(400).json({ error: '試し読みのテキストを入力してください' });
+      return;
+    }
+    const c = await createCandidate({ caption: String(caption), text: sample, seed: Number.isInteger(seed) ? seed : undefined });
+    res.json({ ...c, url: `/api/tts/voice-candidates/${c.id}.wav` });
+  }),
+);
+
+app.get('/api/tts/voice-candidates/:file', (req, res) => {
+  const file = candidateFile(param(req, 'file').replace(/\.wav$/, ''));
+  if (!file || !fs.existsSync(file)) {
+    res.status(404).json({ error: 'candidate not found' });
+    return;
+  }
+  res.type('audio/wav').send(fs.readFileSync(file));
+});
+
+/** 気に入った候補を、全編で使う参照音声として登録する */
+app.post(
+  '/api/tts/voices',
+  h(async (req, res) => {
+    const { candidateId, name, label, caption, text, seed } = req.body ?? {};
+    const file = candidateFile(String(candidateId));
+    if (!file || !fs.existsSync(file)) {
+      res.status(400).json({ error: '候補の音声が見つかりません。もう一度つくり直してください' });
+      return;
+    }
+    res.json(await registerVoice({ name: String(name ?? ''), label, audio: fs.readFileSync(file), caption, text, seed }));
+  }),
+);
+
+/** 手持ちの音声ファイルを参照音声として登録する */
+app.post(
+  '/api/tts/voices/upload',
+  upload.single('file'),
+  h(async (req, res) => {
+    if (!req.file) {
+      res.status(400).json({ error: 'ファイルがありません' });
+      return;
+    }
+    const original = Buffer.from(req.file.originalname, 'latin1').toString('utf8');
+    res.json(
+      await registerVoice({
+        name: String(req.body?.name ?? ''),
+        label: String(req.body?.label ?? '') || path.parse(original).name,
+        audio: req.file.buffer,
+        ext: path.extname(original),
+      }),
+    );
+  }),
+);
+
+/** 参照音声のファイル（?download=1 で保存用）。標準の声・このアプリで作った声・取り込んだ声が対象 */
+app.get(
+  '/api/tts/voices/:id/file',
+  h(async (req, res) => {
+    const id = param(req, 'id');
+    if (!/^[A-Za-z0-9_-]+$/.test(id)) {
+      res.status(400).json({ error: 'invalid voice id' });
+      return;
+    }
+    const file = await localVoiceFile(id);
+    if (!file) {
+      res.status(404).json({ error: 'この声のファイルはこのアプリにありません（Irodori サーバーに直接置かれた声です）' });
+      return;
+    }
+    const label = (await localVoices()).find((v) => v.id === id)?.label ?? id;
+    const name = `${label.replace(/[\\/:*?"<>|]/g, '_')}${path.extname(file)}`;
+    res.setHeader('Content-Disposition', `${req.query.download ? 'attachment' : 'inline'}; filename="${id}${path.extname(file)}"; filename*=UTF-8''${encodeURIComponent(name)}`);
+    res.sendFile(file);
+  }),
+);
+
+app.delete(
+  '/api/tts/voices/:id',
+  h(async (req, res) => {
+    await deleteVoice(param(req, 'id'));
+    res.json({ ok: true });
   }),
 );
 
@@ -315,14 +529,15 @@ app.post(
       return;
     }
     const check = await loadProject(id);
-    const missing = check.scenes.map((sc, i) => (sc.type === 'showcase' && !sc.screenshot ? i + 1 : 0)).filter(Boolean);
+    // ui: は取り込み前の参照（取り込みに失敗した）なので、未設定と同じ扱い
+    const missing = check.scenes.map((sc, i) => (sc.type === 'showcase' && (!sc.screenshot || sc.screenshot.startsWith('ui:')) ? i + 1 : 0)).filter(Boolean);
     if (missing.length) {
       res.status(400).json({ error: `シーン${missing.join('・')}（画面紹介）に実際のスクリーンショットが設定されていません。画像を設定するか、シーンを削除してください。` });
       return;
     }
     const job = startJob('render', id, async (ctx) => {
       const project = await loadProject(id);
-      return renderProject({ project, serverUrl: `http://127.0.0.1:${config.port}`, onProgress: (p, m) => ctx.progress(p, m) });
+      return withFileServer((serverUrl) => renderProject({ project, serverUrl, onProgress: (p, m) => ctx.progress(p, m) }));
     });
     res.json({ jobId: job.id });
   }),
@@ -351,8 +566,25 @@ app.use((err: Error & { status?: number }, _req: Request, res: Response, _next: 
   res.status(err.status ?? 500).json({ error: err.message });
 });
 
+// 外部から接続できる設定なのにログインが無い状態では起動しない（社外に丸見えになるのを防ぐ）
+const loopback = ['127.0.0.1', 'localhost', '::1'].includes(config.host);
+if (!loopback && !authEnabled() && process.env.ALLOW_PUBLIC_WITHOUT_AUTH !== 'true') {
+  console.error(`\n  ✖ HOST=${config.host} で外部に公開する時は、Google ログインの設定が必要です。未設定: ${authProblems().join(', ')}\n    （docs/deploy.md を参照。どうしてもログインなしで LAN に出す時だけ ALLOW_PUBLIC_WITHOUT_AUTH=true）\n`);
+  process.exit(1);
+}
+if (authEnabled() && authProblems().length) console.warn(`  ⚠ ログイン設定の不足: ${authProblems().join(', ')}`);
+
 await seedSamples();
-app.listen(config.port, config.host, () => {
+await emptyTrash();
+app.listen(config.port, config.host, async () => {
   console.log(`\n  Ad Studio server: http://localhost:${config.port}`);
-  console.log(`  OpenAI: ${hasOpenAI() ? `有効 (${config.models.text} / ${config.models.tts} / ${config.models.image})` : '未設定（.env に OPENAI_API_KEY を設定すると AI 機能が使えます）'}\n`);
+  console.log(`  ログイン: ${authEnabled() ? `Google（${[...(process.env.AUTH_ALLOWED_DOMAINS ?? '').split(','), ...(process.env.AUTH_ALLOWED_EMAILS ?? '').split(',')].filter(Boolean).join(', ')}）` : 'なし（このPCだけで使う設定）'}`);
+  console.log(`  OpenAI: ${hasOpenAI() ? `有効 (${config.models.text} / ${config.models.tts} / ${config.models.image})` : '未設定（.env に OPENAI_API_KEY を設定すると AI 機能が使えます）'}`);
+  const provider = resolveProvider('auto');
+  const irodori = await irodoriStatus();
+  console.log(
+    `  ナレーション: ${provider === 'irodori' ? 'Irodori-TTS' : 'OpenAI TTS'}` +
+      (provider === 'irodori' ? (irodori.online ? `（接続OK: ${irodori.url}）` : `（⚠ ${irodori.url} に接続できません。scripts/start-irodori.sh で起動してください）`) : irodori.online ? `（Irodori-TTS も利用可能: ${irodori.url}。使うには .env に IRODORI_TTS_URL を設定）` : '') +
+      '\n',
+  );
 });

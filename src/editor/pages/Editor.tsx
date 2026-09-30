@@ -1,11 +1,15 @@
+import { confirmDialog } from '../components/Dialogs';
+import { Plus } from 'lucide-react';
 import { Player, type PlayerRef } from '@remotion/player';
 import React, { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { AdVideo } from '../../video/AdVideo';
 import { isAudioStale } from '../../video/narrationKey';
-import { FORMATS, Project, type Scene, type SceneType } from '../../video/schema';
+import { applyTextTarget, readAdjust, sceneLayout, setSceneLayout, type TextTarget } from '../../video/edit/textEdit';
+import { EditModeProvider, type EditMode } from '../../video/edit/Editable';
+import { FORMATS, Project, type ElementAdjust, type Scene, type SceneType } from '../../video/schema';
 import { newScene, remapCast, SCENE_TYPE_LABELS } from '../../video/templates';
 import { computeTimeline } from '../../video/timeline';
-import { api, waitJob, type Job } from '../api';
+import { api, ttsFor, waitJob, type Job } from '../api';
 import { go, MetaContext } from '../App';
 import { Progress, Seg } from '../components/Fields';
 import { AudioPanel } from '../components/AudioPanel';
@@ -14,8 +18,10 @@ import { CastPanel } from '../components/CastPanel';
 import { RenderDialog } from '../components/RenderDialog';
 import { ReviseDialog } from '../components/ReviseDialog';
 import { SceneInspector } from '../components/SceneInspector';
+import { ArrowLeft, Check, ChevronDown, ChevronUp, Circle, Copy, Download, Mic, MousePointer2, Play, Redo2, Sparkles, TriangleAlert, Undo2, X } from 'lucide-react';
+import { Ic } from '../icons';
 
-export type Update = (fn: (draft: Project) => void) => void;
+export type Update = (fn: (draft: Project) => void, opts?: { silent?: boolean }) => void;
 export type RunJob = (label: string, url: string, body?: unknown) => Promise<Job | null>;
 
 const sceneSummary = (s: Scene, brand: string) => {
@@ -65,7 +71,16 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
   const [dialog, setDialog] = useState<'render' | 'revise' | null>(null);
   const [addMenu, setAddMenu] = useState(false);
   const [frame, setFrame] = useState(0);
+  const [editing, setEditing] = useState(false);
+  const [selectedEl, setSelectedEl] = useState<string | null>(null);
+  const boxRef = useRef<HTMLDivElement>(null);
+  const [overlayEl, setOverlayEl] = useState<HTMLDivElement | null>(null);
+  const projectRef = useRef<Project | null>(null);
   const playerRef = useRef<PlayerRef>(null);
+  const editingRef = useRef(false);
+  const selectedRef = useRef<string | null>(null);
+  const activeSceneRef = useRef<Scene | null>(null);
+  const editApi = useRef<EditMode | null>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pending = useRef<Project | null>(null);
   const saving = useRef<Promise<unknown>>(Promise.resolve());
@@ -108,16 +123,19 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
   );
 
   const update: Update = useCallback(
-    (fn) => {
+    (fn, opts) => {
       setProject((prev) => {
         if (!prev) return prev;
         const draft = structuredClone(prev);
         fn(draft);
         const parsed = Project.safeParse(draft);
         const next = parsed.success ? parsed.data : draft;
-        history.current.past.push(prev);
-        if (history.current.past.length > 60) history.current.past.shift();
-        history.current.future = [];
+        // ドラッグ中（silent）は履歴を積まない。操作の開始時に beginGesture で1回だけ積む
+        if (!opts?.silent) {
+          history.current.past.push(prev);
+          if (history.current.past.length > 60) history.current.past.shift();
+          history.current.future = [];
+        }
         schedule(next);
         return next;
       });
@@ -141,9 +159,35 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
   }, [project, schedule]);
 
   useEffect(() => {
+    projectRef.current = project;
+  }, [project]);
+
+  useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement)?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+      // 直接調整: 矢印で1px（Shiftで10px）、Delete で非表示、Esc で選択解除
+      if (editingRef.current && selectedRef.current) {
+        const sc = activeSceneRef.current;
+        const id = selectedRef.current;
+        const step = e.shiftKey ? 10 : 1;
+        const d = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }[e.key] as number[] | undefined;
+        if (sc && d) {
+          e.preventDefault();
+          editApi.current?.beginGesture();
+          const cur = readAdjust(sc, id, projectRef.current?.format ?? 'vertical');
+          editApi.current?.commit(sc.id, id, { ...cur, dx: cur.dx + d[0], dy: cur.dy + d[1] }, true);
+          return;
+        }
+        if (sc && (e.key === 'Delete' || e.key === 'Backspace')) {
+          e.preventDefault();
+          editApi.current?.beginGesture();
+          editApi.current?.commit(sc.id, id, { ...readAdjust(sc, id, projectRef.current?.format ?? 'vertical'), hidden: true }, true);
+          setSelectedEl(null);
+          return;
+        }
+        if (e.key === 'Escape') setSelectedEl(null);
+      }
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z') {
         e.preventDefault();
         if (e.shiftKey) redo();
@@ -205,14 +249,64 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
   }, [project?.id, size.w]);
 
   const staleCount = useMemo(
-    () => (project ? project.scenes.reduce((a, s) => a + s.lines.filter((l) => isAudioStale(l, project.cast, meta.models.tts)).length, 0) : 0),
-    [project, meta.models.tts],
+    () => (project ? project.scenes.reduce((a, s) => a + s.lines.filter((l) => isAudioStale(l, project.cast, ttsFor(meta, project.audio.ttsProvider).engine)).length, 0) : 0),
+    [project, meta],
   );
 
   /** 実スクリーンショット未設定の画面紹介シーン（番号）。書き出し前に必須 */
-  const missingShots = useMemo(() => (project ? project.scenes.flatMap((s, i) => (s.type === 'showcase' && !s.screenshot ? [i + 1] : [])) : []), [project]);
+  const missingShots = useMemo(() => (project ? project.scenes.flatMap((s, i) => (s.type === 'showcase' && (!s.screenshot || s.screenshot.startsWith('ui:')) ? [i + 1] : [])) : []), [project]);
 
   const inputProps = useMemo(() => (project ? { project, assetBaseUrl: `/files/${project.id}/` } : null), [project]);
+
+  const curIdx = project && timeline ? timeline.scenes.findIndex((st) => frame >= st.start && frame < st.start + st.duration) : -1;
+  const activeSceneId = editing && project && curIdx >= 0 ? project.scenes[curIdx]?.id ?? null : null;
+  const compScale = size.w > 0 ? size.w / fmt.width : 1;
+  // 再生中は毎フレームこのコンポーネントが描き直されるので、値を使い回す（作り直すと映像全体が再描画されて音がとぎれる）
+  const editMode: EditMode = useMemo(() => ({
+    enabled: editing,
+    activeSceneId,
+    compScale,
+    canvas: { w: fmt.width, h: fmt.height },
+    overlay: overlayEl,
+    selectedId: selectedEl,
+    select: setSelectedEl,
+    beginGesture: () => {
+      const cur = projectRef.current;
+      if (!cur) return;
+      history.current.past.push(cur);
+      if (history.current.past.length > 60) history.current.past.shift();
+      history.current.future = [];
+    },
+    commit: (sceneId, id, adjust: ElementAdjust | null, silent) =>
+      update((p) => {
+        const sc = p.scenes.find((x) => x.id === sceneId);
+        if (!sc) return;
+        // 今の画面の形（縦型・正方形・横型）の調整だけを書き換える
+        const layout = { ...sceneLayout(sc, p.format) };
+        if (adjust) layout[id] = adjust;
+        else delete layout[id];
+        setSceneLayout(sc, p.format, layout);
+      }, { silent: silent ?? false }),
+    commitText: (sceneId, target: TextTarget, value) =>
+      update((p) => {
+        if (target.type === 'brandName') {
+          p.brand.name = value;
+          return;
+        }
+        const sc = p.scenes.find((x) => x.id === sceneId);
+        if (sc) applyTextTarget(sc, target, value);
+      }),
+    patchLine: (sceneId, lineId, patch, silent) =>
+      update((p) => {
+        const line = p.scenes.find((x) => x.id === sceneId)?.lines.find((l) => l.id === lineId);
+        if (line) Object.assign(line, patch);
+      }, { silent: silent ?? false }),
+    pause: () => playerRef.current?.pause(),
+    getOrigin: () => {
+      const r = boxRef.current?.getBoundingClientRect();
+      return { left: r?.left ?? 0, top: r?.top ?? 0 };
+    },
+  }), [editing, activeSceneId, compScale, fmt.width, fmt.height, selectedEl, overlayEl, update]);
 
   if (loadErr) return <div className="home"><div className="error">{loadErr}</div></div>;
   if (!project || !timeline || !inputProps) return <div className="home muted">読み込み中…</div>;
@@ -245,7 +339,18 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
     setAddMenu(false);
   };
 
+  const setMode = (on: boolean) => {
+    setEditing(on);
+    setSelectedEl(null);
+    playerRef.current?.pause();
+  };
   const currentScene = timeline.scenes.findIndex((st) => frame >= st.start && frame < st.start + st.duration);
+  const activeScene = editing && currentScene >= 0 ? project.scenes[currentScene] : null;
+  editingRef.current = editing;
+  selectedRef.current = selectedEl;
+  activeSceneRef.current = activeScene;
+
+  editApi.current = editMode;
 
   return (
     <div className="editor">
@@ -257,17 +362,17 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
             go('/');
           }}
         >
-          ←
+          <Ic n={ArrowLeft} mr={0} />
         </button>
         <input className="title-input" value={project.title} onChange={(e) => update((p) => void (p.title = e.target.value))} />
         <span className="save-state">
-          {saveState === 'saved' ? '✓ 保存済み' : saveState === 'saving' ? '保存中…' : saveState === 'dirty' ? '編集中' : '⚠ 保存失敗'}
+          {saveState === 'saved' ? <><Ic n={Check} />保存済み</> : saveState === 'saving' ? '保存中…' : saveState === 'dirty' ? '編集中' : <><Ic n={TriangleAlert} />保存失敗</>}
         </span>
         <button className="btn sm ghost" onClick={undo} title="元に戻す (Ctrl+Z)">
-          ↶
+          <Ic n={Undo2} mr={0} />
         </button>
         <button className="btn sm ghost" onClick={redo} title="やり直す (Ctrl+Shift+Z)">
-          ↷
+          <Ic n={Redo2} mr={0} />
         </button>
         <div className="spacer" />
         <Seg
@@ -281,15 +386,15 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
         />
         <span className="faint">{(timeline.total / project.fps).toFixed(1)}秒</span>
         <button className="btn" disabled={!meta.openai} onClick={() => setDialog('revise')} title="AIに修正を指示">
-          ✨ AIで修正
+          <Ic n={Sparkles} />AIで修正
         </button>
         <button
           className="btn"
-          disabled={!meta.openai || staleCount === 0 || !project.audio.narration}
+          disabled={!ttsFor(meta, project.audio.ttsProvider).ready || staleCount === 0 || !project.audio.narration}
           onClick={() => runJob('ナレーションを生成しています', `/api/projects/${project.id}/narration`)}
-          title={staleCount ? '変更されたセリフの音声を作成します' : 'すべてのセリフに音声があります'}
+          title={!ttsFor(meta, project.audio.ttsProvider).ready ? '音声エンジンが使えません（「音・設定」タブを確認）' : staleCount ? '変更されたセリフの音声を作成します' : 'すべてのセリフに音声があります'}
         >
-          🎙 ナレーション生成 {staleCount ? <span className="count">{staleCount}</span> : null}
+          <Ic n={Mic} />ナレーション生成 {staleCount ? <span className="count">{staleCount}</span> : null}
         </button>
         <button
           className="btn primary"
@@ -298,7 +403,7 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
             setDialog('render');
           }}
         >
-          ⬇ 書き出し
+          <Ic n={Download} />書き出し
         </button>
       </div>
 
@@ -308,7 +413,7 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
             <strong style={{ flex: 1 }}>シーン</strong>
             <div style={{ position: 'relative' }}>
               <button className="btn sm" onClick={() => setAddMenu((v) => !v)}>
-                ＋ 追加
+                <Ic n={Plus} />追加
               </button>
               {addMenu ? (
                 <div className="menu" style={{ right: 0, top: 30 }}>
@@ -324,7 +429,7 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
           <div className="scene-list">
             {project.scenes.map((s, i) => {
               const st = timeline.scenes[i];
-              const stale = s.lines.some((l) => isAudioStale(l, project.cast, meta.models.tts));
+              const stale = s.lines.some((l) => isAudioStale(l, project.cast, ttsFor(meta, project.audio.ttsProvider).engine));
               return (
                 <div key={s.id} className={`scene-item ${i === sel ? 'on' : ''}`} onClick={() => selectScene(i)}>
                   <div className="num">{i + 1}</div>
@@ -332,17 +437,17 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
                     <div className="type">
                       {SCENE_TYPE_LABELS[s.type].split('（')[0]}
                       <span className="dur">{st ? (st.duration / project.fps).toFixed(1) : '-'}s</span>
-                      {stale && project.audio.narration ? <span className="audio-stale" title="音声が未生成">●</span> : null}
-                      {s.type === 'showcase' && !s.screenshot ? <span className="audio-stale" title="スクリーンショット未設定">⚠ 画面未設定</span> : null}
+                      {stale && project.audio.narration ? <span className="audio-stale" title="音声が未生成"><Ic n={Circle} size={8} mr={0} /></span> : null}
+                      {s.type === 'showcase' && (!s.screenshot || s.screenshot.startsWith('ui:')) ? <span className="audio-stale" title="スクリーンショット未設定"><Ic n={TriangleAlert} size={12} />画面未設定</span> : null}
                     </div>
                     <div className="text">{sceneSummary(s, project.brand.name) || '（未入力）'}</div>
                   </div>
                   <div className="tools" onClick={(e) => e.stopPropagation()}>
                     <button title="上へ" onClick={() => moveScene(i, -1)}>
-                      ▲
+                      <Ic n={ChevronUp} mr={0} />
                     </button>
                     <button title="下へ" onClick={() => moveScene(i, 1)}>
-                      ▼
+                      <Ic n={ChevronDown} mr={0} />
                     </button>
                     <button
                       title="複製"
@@ -350,21 +455,39 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
                         update((p) => {
                           const c = structuredClone(p.scenes[i]);
                           c.id = `s-${Math.random().toString(36).slice(2, 8)}`;
-                          c.lines.forEach((l) => (l.id = `l-${Math.random().toString(36).slice(2, 8)}`));
+                          const ids = new Map<string, string>();
+                          c.lines.forEach((l) => {
+                            const next = `l-${Math.random().toString(36).slice(2, 8)}`;
+                            ids.set(l.id, next);
+                            l.id = next;
+                          });
+                          // 位置調整はセリフIDで保存しているので、新しいIDに付け替える
+                          if (c.layouts) {
+                            for (const f of Object.keys(c.layouts) as (keyof typeof c.layouts)[]) {
+                              c.layouts[f] = Object.fromEntries(
+                                Object.entries(c.layouts[f] ?? {}).map(([k, v]) => {
+                                  const m = /^(line|caption):(.+)$/.exec(k);
+                                  return [m && ids.has(m[2]) ? `${m[1]}:${ids.get(m[2])}` : k, v];
+                                }),
+                              );
+                            }
+                          }
                           p.scenes.splice(i + 1, 0, c);
                         })
                       }
                     >
-                      ⧉
+                      <Ic n={Copy} mr={0} />
                     </button>
                     <button
                       title="削除"
                       onClick={() => {
                         if (project.scenes.length <= 1) return;
-                        if (confirm(`シーン${i + 1}を削除しますか？`)) update((p) => void p.scenes.splice(i, 1));
+                        confirmDialog({ title: `シーン${i + 1}を削除しますか？`, message: '「元に戻す」（Ctrl+Z）で戻せます。', ok: '削除する', danger: true }).then(
+                          (ok) => ok && update((p) => void p.scenes.splice(i, 1)),
+                        );
                       }}
                     >
-                      ✕
+                      <Ic n={X} mr={0} />
                     </button>
                   </div>
                 </div>
@@ -373,10 +496,35 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
           </div>
         </div>
 
-        <div className="stage">
+        <div className={`stage ${editing ? 'editing' : ''}`}>
+          <div className={`modebar ${editing ? 'edit' : ''}`}>
+            <div className="mode-seg" role="tablist">
+              <button className={!editing ? 'on' : ''} onClick={() => setMode(false)} title="再生して仕上がりを確認します">
+                <Ic n={Play} size={13} />
+                プレビュー
+              </button>
+              <button className={editing ? 'on' : ''} onClick={() => setMode(true)} title="映像の要素を直接ドラッグして配置を調整します">
+                <Ic n={MousePointer2} size={13} />
+                直接調整
+              </button>
+            </div>
+            <div className="spacer" />
+            {editing ? (
+              <button className="btn sm" onClick={() => setMode(false)}>
+                プレビューに戻る
+              </button>
+            ) : null}
+          </div>
           <div className="player-wrap" ref={stageRef}>
             {size.w > 0 ? (
-              <div className="player-box" style={{ width: size.w, height: size.h }}>
+              <div
+                className="player-box"
+                ref={boxRef}
+                data-edit-canvas={editing ? 'on' : undefined}
+                style={{ width: size.w, height: size.h }}
+                onPointerDown={editing ? () => setSelectedEl(null) : undefined}
+              >
+                <EditModeProvider value={editing ? editMode : null}>
                 <Player
                   ref={playerRef}
                   component={AdVideo}
@@ -386,11 +534,13 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
                   compositionWidth={fmt.width}
                   compositionHeight={fmt.height}
                   style={{ width: size.w, height: size.h }}
-                  controls
-                  clickToPlay
+                  controls={!editing}
+                  clickToPlay={!editing}
                   numberOfSharedAudioTags={24}
                   spaceKeyToPlayOrPause={false}
                 />
+                </EditModeProvider>
+                <div ref={setOverlayEl} data-edit-overlay style={{ position: 'absolute', inset: 0, zIndex: 1000, pointerEvents: 'none' }} />
               </div>
             ) : null}
           </div>
@@ -426,10 +576,10 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
             ))}
           </div>
           <div className="scroll">
-            {tab === 'scene' && selScene ? <SceneInspector project={project} index={sel} update={update} timing={timeline.scenes[sel]} /> : null}
+            {tab === 'scene' && selScene ? <SceneInspector project={project} index={sel} update={update} timing={timeline.scenes[sel]} runJob={runJob} onSelectElement={(id) => { setEditing(true); setSelectedEl(id); playerRef.current?.pause(); }} /> : null}
             {tab === 'brand' ? <BrandPanel project={project} update={update} /> : null}
             {tab === 'cast' ? <CastPanel project={project} update={update} runJob={runJob} flush={flush} /> : null}
-            {tab === 'audio' ? <AudioPanel project={project} update={update} runJob={runJob} /> : null}
+            {tab === 'audio' ? <AudioPanel project={project} update={update} runJob={runJob} onSelectScene={selectScene} /> : null}
           </div>
         </div>
       </div>

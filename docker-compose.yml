@@ -1,0 +1,27 @@
+# 社内公開用（Google ログイン必須）。設定は .env に書く（docs/deploy.md 参照）
+#   docker compose up -d --build                     … アプリだけ（リバースプロキシは別に用意）
+#   docker compose --profile tunnel up -d --build    … Cloudflare Tunnel も一緒に起動（CLOUDFLARE_TUNNEL_TOKEN が必要）
+services:
+  studio:
+    build: .
+    env_file: .env
+    environment:
+      HOST: 0.0.0.0
+      PORT: 3210
+    # 外からは直接つながせず、トンネル／リバースプロキシ経由だけにする
+    ports:
+      - "127.0.0.1:3210:3210"
+    volumes:
+      - ./projects:/app/projects
+      - ./voices:/app/voices
+      - ./SUSHI UI:/app/SUSHI UI
+    restart: unless-stopped
+
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    profiles: ["tunnel"]
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN}
+    depends_on: [studio]
+    restart: unless-stopped

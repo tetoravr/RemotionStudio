@@ -1,4 +1,4 @@
-import type { CastMember, Line } from './schema';
+import { DEFAULT_VOICE_SPEED, type CastMember, type Line } from './schema';
 
 /** 53bit の軽量ハッシュ（サーバー・エディター共通で使う） */
 const cyrb53 = (str: string, seed = 0) => {
@@ -17,7 +17,7 @@ const cyrb53 = (str: string, seed = 0) => {
 export const NARRATOR_VOICE: CastMember['voice'] = {
   voice: 'marin',
   instructions: '明るく聞き取りやすいCMナレーション。自然な話し方で、テンポよく、はっきりと。',
-  speed: 1.0,
+  speed: DEFAULT_VOICE_SPEED,
 };
 
 export const voiceFor = (speaker: string, cast: CastMember[]): CastMember['voice'] =>
@@ -26,9 +26,30 @@ export const voiceFor = (speaker: string, cast: CastMember[]): CastMember['voice
 /** 読み上げ用テキスト（[[ ]] や改行を除去） */
 export const speechText = (line: Line) => (line.speak || line.text).replace(/\[\[|\]\]/g, '').replace(/\n/g, '');
 
-/** セリフ音声の同一性キー。文言・声・話速・モデルが変わったら再生成が必要 */
-export const narrationHash = (line: Line, voice: CastMember['voice'], ttsModel: string) =>
-  cyrb53(JSON.stringify([speechText(line), line.delivery ?? '', voice.voice, voice.instructions, voice.speed, ttsModel]));
+export type TtsProvider = 'openai' | 'irodori';
 
-export const isAudioStale = (line: Line, cast: CastMember[], ttsModel: string) =>
-  Boolean(speechText(line).trim()) && (!line.audio || line.audio.hash !== narrationHash(line, voiceFor(line.speaker, cast), ttsModel));
+/** Irodori-TTS のエンジン ID は `irodori:` で始まる */
+export const isIrodoriEngine = (engine: string) => engine.startsWith('irodori');
+
+/** Irodori-TTS に渡す声の指定。参照音声があるときはキャプションと衝突しやすいので、キャプションは感情の指示だけにする */
+export const irodoriCaption = (voice: CastMember['voice'], delivery?: string) => {
+  const base = voice.refVoice ? '' : (voice.caption || voice.instructions || '').trim();
+  const d = delivery?.trim() ? `このセリフは「${delivery.trim().replace(/[。.]$/, '')}」という調子で読む。` : '';
+  return [base, d].filter(Boolean).join('\n');
+};
+
+/**
+ * セリフ音声の同一性キー。文言・声・話速・エンジンが変わったら再生成が必要。
+ * @param engine 'gpt-4o-mini-tts'（OpenAI のモデル名）または 'irodori:<モデル>'
+ */
+export const narrationHash = (line: Line, voice: CastMember['voice'], engine: string) =>
+  cyrb53(
+    JSON.stringify(
+      isIrodoriEngine(engine)
+        ? [speechText(line), line.emoji ?? '', irodoriCaption(voice, line.delivery), voice.seed ?? null, voice.refVoice ?? '', voice.speed, engine]
+        : [speechText(line), line.delivery ?? '', voice.voice, voice.instructions, voice.speed, engine],
+    ),
+  );
+
+export const isAudioStale = (line: Line, cast: CastMember[], engine: string) =>
+  Boolean(speechText(line).trim()) && (!line.audio || line.audio.hash !== narrationHash(line, voiceFor(line.speaker, cast), engine));

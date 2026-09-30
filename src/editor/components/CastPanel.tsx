@@ -1,11 +1,16 @@
+import { confirmDialog, errorDialog } from './Dialogs';
+import { Plus } from 'lucide-react';
 import React, { useContext, useRef, useState } from 'react';
 import { LIBRARY_CHARACTERS, libraryCastMember } from '../../video/library';
 import { POSES, type CastMember, type Pose, type Project } from '../../video/schema';
-import { api } from '../api';
+import { api, ttsFor } from '../api';
 import { MetaContext } from '../App';
 import type { RunJob, Update } from '../pages/Editor';
-import { Field, FilePick, Select, Slider, Text } from './Fields';
+import { VoiceLab } from './VoiceLab';
+import { Field, FilePick, Num, Select, Slider, Text } from './Fields';
 import { POSE_LABELS } from './SceneInspector';
+import { Download, Mic, Play, Sparkles, Square, X } from 'lucide-react';
+import { Ic } from '../icons';
 
 const STYLE_LABELS: Record<string, string> = {
   anime: 'アニメ調（基準画像に合わせる）',
@@ -37,7 +42,7 @@ export const CastPanel: React.FC<{ project: Project; update: Update; runJob: Run
           })
         }
       >
-        ＋ キャラクターを追加
+        <Ic n={Plus} />キャラクターを追加
       </button>
     </div>
   );
@@ -54,6 +59,7 @@ const CastCard: React.FC<{ project: Project; member: CastMember; index: number; 
   const [previewing, setPreviewing] = useState(false);
   const [previewErr, setPreviewErr] = useState<string | null>(null);
   const audio = useRef<HTMLAudioElement | null>(null);
+  const tts = ttsFor(meta, project.audio.ttsProvider);
 
   const applyLibrary = (libId: string) =>
     update((p) => {
@@ -67,7 +73,11 @@ const CastCard: React.FC<{ project: Project; member: CastMember; index: number; 
     setPreviewErr(null);
     try {
       const line = project.scenes.flatMap((s) => s.lines).find((l) => l.speaker === c.id);
-      const url = await api.ttsPreview(line?.speak || line?.text || 'こんにちは！今日はよろしくお願いします！', c.voice, line?.delivery);
+      const url = await api.ttsPreview(line?.speak || line?.text || 'こんにちは！今日はよろしくお願いします！', c.voice, {
+        delivery: line?.delivery,
+        emoji: line?.emoji,
+        provider: tts.provider,
+      });
       audio.current?.pause();
       audio.current = new Audio(url);
       await audio.current.play();
@@ -93,8 +103,8 @@ const CastCard: React.FC<{ project: Project; member: CastMember; index: number; 
         <span className="faint">id: {c.id}</span>
         <div className="spacer" />
         {index > 1 ? (
-          <button className="icon-btn" onClick={() => confirm(`${c.name} を削除しますか？`) && update((p) => void p.cast.splice(index, 1))}>
-            ✕
+          <button className="icon-btn" onClick={async () => (await confirmDialog({ title: `${c.name} を削除しますか？`, ok: '削除する', danger: true })) && update((p) => void p.cast.splice(index, 1))}>
+            <Ic n={X} mr={0} />
           </button>
         ) : null}
       </div>
@@ -141,7 +151,7 @@ const CastCard: React.FC<{ project: Project; member: CastMember; index: number; 
 
       <div className="sub">
         <div className="label" style={{ marginBottom: 6 }}>
-          ✨ オリジナルキャラクターをAIで生成
+          <Ic n={Sparkles} />オリジナルキャラクターをAIで生成
         </div>
         <Field label="基準にする画像（任意）" hint="キャラのデザインシートやイラストを入れると、その見た目に合わせて全表情を作ります。無い場合は説明文から作ります">
           <div className="row center">
@@ -209,23 +219,60 @@ const CastCard: React.FC<{ project: Project; member: CastMember; index: number; 
 
       <div className="sub" style={{ marginTop: 10 }}>
         <div className="label" style={{ marginBottom: 6 }}>
-          🎙 声（OpenAI TTS）
+          <Ic n={Mic} />声（{tts.provider === 'irodori' ? 'Irodori-TTS' : 'OpenAI TTS'}）
         </div>
-        <div className="row tight">
-          <Field label="ボイス">
-            <Select value={c.voice.voice} onChange={(v) => set((m) => void (m.voice.voice = v))} options={meta.voices.map((v) => ({ value: v.id, label: v.label }))} />
-          </Field>
-          <Field label="話速調整" hint="1.0が自然。1.1を超えると不自然になりやすい">
-            <Slider value={c.voice.speed} min={0.9} max={1.2} step={0.01} onChange={(v) => set((m) => void (m.voice.speed = v))} format={(v) => `×${v.toFixed(2)}`} />
-          </Field>
-        </div>
-        <Field label="話し方の指示" hint="年齢感・声のトーン・間の取り方など。セリフごとの感情は、シーンの「演技指示」で指定できます">
-          <Text value={c.voice.instructions} onChange={(v) => set((m) => void (m.voice.instructions = v))} multiline />
-        </Field>
+        {tts.provider === 'irodori' ? (
+          <>
+            <Field label="声のデザイン（キャプション）" hint="年齢・性別・声質・話し方を日本語で。例: 落ち着いた低めの女性の声。丁寧で穏やかに話す。空ならこのキャラの「話し方の指示」を使います">
+              <Text
+                value={c.voice.caption ?? ''}
+                onChange={(v) => set((m) => void (m.voice.caption = v || undefined))}
+                multiline
+                placeholder={c.voice.instructions}
+              />
+            </Field>
+            <div className="row tight">
+              <Field label="声のシード" hint="同じ数字なら同じ声になりやすい。声が気に入らなければ数字を変えて試聴">
+                <Num value={c.voice.seed ?? 0} min={0} max={999999} onChange={(v) => set((m) => void (m.voice.seed = Math.round(v)))} />
+              </Field>
+              <Field label="参照音声（声の固定）" hint="サーバーに登録した声を選ぶと、その声をまねます（自分の声・許諾を得た声のみ）。選ぶとキャプションは感情の指示だけに使われます">
+                <Select
+                  value={c.voice.refVoice ?? ''}
+                  onChange={(v) => set((m) => void (m.voice.refVoice = v || undefined))}
+                  options={[{ value: '', label: 'なし（キャプション＋シードで声を作る）' }, ...meta.tts.irodori.voices.map((v) => ({ value: v, label: meta.tts.irodori.labels?.[v] ?? v }))]}
+                />
+                {c.voice.refVoice ? <RefVoiceActions id={c.voice.refVoice} /> : null}
+              </Field>
+            </div>
+            <Field label="話速" hint="1.0が標準。上げると、モデル自身が速く話します（音が不自然になりにくい）。セリフごとの感情は、シーンの「感情」「演技指示」で指定できます">
+              <Slider value={c.voice.speed} min={0.8} max={1.6} step={0.01} onChange={(v) => set((m) => void (m.voice.speed = v))} format={(v) => `×${v.toFixed(2)}`} />
+            </Field>
+            <VoiceLab member={c} set={set} />
+          </>
+        ) : (
+          <>
+            <div className="row tight">
+              <Field label="ボイス">
+                <Select value={c.voice.voice} onChange={(v) => set((m) => void (m.voice.voice = v))} options={meta.voices.map((v) => ({ value: v.id, label: v.label }))} />
+              </Field>
+              <Field label="話速調整" hint="1.0が自然。1.1を超えると不自然になりやすい">
+                <Slider value={c.voice.speed} min={0.9} max={1.5} step={0.01} onChange={(v) => set((m) => void (m.voice.speed = v))} format={(v) => `×${v.toFixed(2)}`} />
+              </Field>
+            </div>
+            <Field label="話し方の指示" hint="年齢感・声のトーン・間の取り方など。セリフごとの感情は、シーンの「演技指示」で指定できます">
+              <Text value={c.voice.instructions} onChange={(v) => set((m) => void (m.voice.instructions = v))} multiline />
+            </Field>
+          </>
+        )}
         <div className="row center">
-          <button className="btn sm" style={{ flex: 'none' }} disabled={!meta.openai || previewing} onClick={preview}>
-            {previewing ? '生成中…' : '▶ 試聴'}
+          <button className="btn sm" style={{ flex: 'none' }} disabled={!tts.ready || previewing} onClick={preview}>
+            {previewing ? '生成中…' : (
+              <>
+                <Ic n={Play} />試聴
+              </>
+            )}
           </button>
+          {previewing && tts.provider === 'irodori' ? <span className="faint">GPUなしだと1文で30〜60秒かかります</span> : null}
           {previewErr ? <span className="faint" style={{ color: 'var(--danger)' }}>{previewErr}</span> : null}
         </div>
       </div>
@@ -233,11 +280,46 @@ const CastCard: React.FC<{ project: Project; member: CastMember; index: number; 
   );
 };
 
-const PoseThumb: React.FC<{ src?: string; onFile: (f: File) => void; dim?: boolean }> = ({ src, onFile, dim }) => {
+/** 参照中の声を聞く・保存する */
+const RefVoiceActions: React.FC<{ id: string }> = ({ id }) => {
+  const [playing, setPlaying] = useState(false);
+  const audio = useRef<HTMLAudioElement | null>(null);
+  const url = `/api/tts/voices/${encodeURIComponent(id)}/file`;
+  return (
+    <div className="row center tight" style={{ marginTop: 6 }}>
+      <button
+        className="btn sm"
+        style={{ flex: 'none' }}
+        onClick={() => {
+          if (playing) {
+            audio.current?.pause();
+            setPlaying(false);
+            return;
+          }
+          audio.current?.pause();
+          const a = new Audio(url);
+          a.onended = () => setPlaying(false);
+          a.onerror = () => setPlaying(false);
+          audio.current = a;
+          a.play().then(() => setPlaying(true)).catch(() => setPlaying(false));
+        }}
+      >
+        <Ic n={playing ? Square : Play} size={12} />
+        {playing ? '停止' : '参照音声を聞く'}
+      </button>
+      <a className="btn sm" style={{ flex: 'none', textDecoration: 'none' }} href={`${url}?download=1`} download>
+        <Ic n={Download} size={12} />
+        ダウンロード
+      </a>
+    </div>
+  );
+};
+
+const PoseThumb: React.FC<{ src?: string; onFile: (f: File) => void | Promise<unknown>; dim?: boolean }> = ({ src, onFile, dim }) => {
   const ref = useRef<HTMLInputElement>(null);
   return (
     <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'flex-end', justifyContent: 'center', cursor: 'pointer', opacity: dim && !src ? 0.5 : 1 }} onClick={() => ref.current?.click()}>
-      {src ? <img src={src} alt="" style={{ maxHeight: '100%', maxWidth: '100%', objectFit: 'contain' }} /> : <div className="faint" style={{ margin: 'auto' }}>＋</div>}
+      {src ? <img src={src} alt="" style={{ maxHeight: '100%', maxWidth: '100%', objectFit: 'contain' }} /> : <div className="faint" style={{ margin: 'auto' }}><Ic n={Plus} size={16} mr={0} /></div>}
       <input
         ref={ref}
         type="file"
@@ -245,7 +327,7 @@ const PoseThumb: React.FC<{ src?: string; onFile: (f: File) => void; dim?: boole
         style={{ display: 'none' }}
         onChange={(e) => {
           const f = e.target.files?.[0];
-          if (f) onFile(f);
+          if (f) Promise.resolve(onFile(f)).catch((err) => errorDialog('画像を読み込めませんでした', err));
           e.target.value = '';
         }}
       />

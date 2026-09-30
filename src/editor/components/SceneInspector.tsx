@@ -1,5 +1,9 @@
+import { Plus, Sparkles } from 'lucide-react';
+import { ElementList } from './ElementList';
+import { normalizeAdjust, readAdjust, sceneLayout, setSceneLayout } from '../../video/edit/textEdit';
 import React, { useContext, useRef } from 'react';
 import { ICON_LABELS } from '../../video/components/Icon';
+import { IRODORI_EMOJI } from '../../video/emotions';
 import { isAudioStale } from '../../video/narrationKey';
 import {
   BACKGROUNDS, ICON_NAMES, POSES, TRANSITIONS,
@@ -7,11 +11,14 @@ import {
 } from '../../video/schema';
 import { SCENE_TYPE_LABELS } from '../../video/templates';
 import type { SceneTiming } from '../../video/timeline';
-import { api } from '../api';
+import { api, ttsFor } from '../api';
 import { assetUrl } from './CastPanel';
 import { MetaContext } from '../App';
-import type { Update } from '../pages/Editor';
+import type { RunJob, Update } from '../pages/Editor';
+import { regenerateLine } from './NarrationList';
 import { Field, FilePick, Num, Select, Text, Toggle } from './Fields';
+import { ChevronUp, Circle, Play, RefreshCw, X } from 'lucide-react';
+import { Ic } from '../icons';
 
 export const POSE_LABELS: Record<string, string> = {
   default: '通常', happy: '喜び', surprised: '驚き', sad: 'しょんぼり', think: '考え中', point: '指さし', wave: '手を振る', wink: 'ウインク',
@@ -24,7 +31,8 @@ const BG_LABELS: Record<string, string> = {
 const iconOptions = ICON_NAMES.map((n) => ({ value: n, label: `${ICON_LABELS[n]}（${n}）` }));
 const rid = () => Math.random().toString(36).slice(2, 8);
 
-export const SceneInspector: React.FC<{ project: Project; index: number; update: Update; timing?: SceneTiming }> = ({ project, index, update, timing }) => {
+export const SceneInspector: React.FC<{ project: Project; index: number; update: Update; timing?: SceneTiming; runJob?: RunJob; onSelectElement?: (id: string) => void }> = ({ project, index, update, timing, runJob, onSelectElement }) => {
+  const meta = useContext(MetaContext)!;
   const scene = project.scenes[index];
   const set = <K extends string>(key: K, value: unknown) =>
     update((p) => {
@@ -34,6 +42,7 @@ export const SceneInspector: React.FC<{ project: Project; index: number; update:
 
   return (
     <div>
+      <ElementList project={project} index={index} update={update} onSelect={onSelectElement} />
       <div className="section">
         <div className="section-title">
           {SCENE_TYPE_LABELS[scene.type]}
@@ -99,6 +108,37 @@ export const SceneInspector: React.FC<{ project: Project; index: number; update:
                 </Field>
               </div>
             ) : null}
+            {scene.prop ? (
+              <Field label="図解イラスト" hint="課題の状況をAIが図解にします（文字なし）。画像があるとアイコンのカードの代わりに大きく表示されます">
+                <div className="row center tight" style={{ flexWrap: 'wrap' }}>
+                  {scene.prop.image ? <img src={assetUrl(project.id, scene.prop.image)} alt="" style={{ height: 72, flex: 'none', borderRadius: 8, background: '#fff' }} /> : null}
+                  <button
+                    className="btn sm primary"
+                    style={{ flex: 'none' }}
+                    disabled={!meta.openai || !runJob}
+                    title={meta.openai ? '' : 'OPENAI_API_KEY が必要です'}
+                    onClick={() => runJob?.('課題の図解を作っています（約20秒）', `/api/projects/${project.id}/illustrations`, { sceneIds: [scene.id] })}
+                  >
+                    <Ic n={Sparkles} />
+                    {scene.prop.image ? 'AIで作り直す' : 'AIで図解を作る'}
+                  </button>
+                  <FilePick
+                    accept="image/*"
+                    onFile={async (f) => {
+                      const { path } = await api.upload(project.id, f);
+                      set('prop', { ...scene.prop, image: path });
+                    }}
+                  >
+                    画像を使う
+                  </FilePick>
+                  {scene.prop.image ? (
+                    <button className="btn sm ghost" style={{ flex: 'none' }} onClick={() => set('prop', { ...scene.prop, image: undefined })}>
+                      外す
+                    </button>
+                  ) : null}
+                </div>
+              </Field>
+            ) : null}
           </>
         ) : null}
         {scene.type === 'feature' ? (
@@ -112,7 +152,7 @@ export const SceneInspector: React.FC<{ project: Project; index: number; update:
             <Field label="注記（小さく）">
               <Text value={scene.footnote} onChange={(v) => set('footnote', v || undefined)} />
             </Field>
-            <VisualEditor projectId={project.id} visual={scene.visual} onChange={(v) => set('visual', v)} />
+            <VisualEditor projectId={project.id} sceneId={scene.id} visual={scene.visual} onChange={(v) => set('visual', v)} runJob={runJob} />
           </>
         ) : null}
         {scene.type === 'showcase' ? <ShowcaseFields project={project} scene={scene} set={set} /> : null}
@@ -134,7 +174,7 @@ export const SceneInspector: React.FC<{ project: Project; index: number; update:
         ) : null}
       </div>
 
-      <LinesEditor project={project} index={index} update={update} timing={timing} />
+      <LinesEditor project={project} index={index} update={update} timing={timing} runJob={runJob} />
       <CharactersEditor project={project} index={index} update={update} />
 
       <div className="section">
@@ -159,7 +199,7 @@ export const SceneInspector: React.FC<{ project: Project; index: number; update:
   );
 };
 
-const LinesEditor: React.FC<{ project: Project; index: number; update: Update; timing?: SceneTiming }> = ({ project, index, update, timing }) => {
+const LinesEditor: React.FC<{ project: Project; index: number; update: Update; timing?: SceneTiming; runJob?: RunJob }> = ({ project, index, update, timing, runJob }) => {
   const meta = useContext(MetaContext)!;
   const scene = project.scenes[index];
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -170,8 +210,14 @@ const LinesEditor: React.FC<{ project: Project; index: number; update: Update; t
     });
   const play = (src: string) => {
     audioRef.current?.pause();
-    audioRef.current = new Audio(`/files/${project.id}/${src}`);
+    audioRef.current = new Audio(`/files/${project.id}/${src}?t=${Date.now()}`);
     audioRef.current.play();
+  };
+  const tts = ttsFor(meta, project.audio.ttsProvider);
+  const redo = async (id: string) => {
+    if (!runJob) return;
+    const fresh = await regenerateLine(project, id, runJob);
+    if (fresh) play(fresh.src);
   };
   return (
     <div className="section">
@@ -180,7 +226,7 @@ const LinesEditor: React.FC<{ project: Project; index: number; update: Update; t
         上から順に喋ります。表示「なし」は声だけ（特徴シーンで見出しと同じ文を読む時など）
       </div>
       {scene.lines.map((l, li) => {
-        const stale = isAudioStale(l, project.cast, meta.models.tts);
+        const stale = isAudioStale(l, project.cast, ttsFor(meta, project.audio.ttsProvider).engine);
         const lt = timing?.lines[li];
         return (
           <div className="sub" key={l.id}>
@@ -190,13 +236,23 @@ const LinesEditor: React.FC<{ project: Project; index: number; update: Update; t
                 <Select value={l.speaker} onChange={(v) => setLine(li, { speaker: v })} options={speakers} />
               </div>
               {project.audio.narration ? (
-                l.audio && !stale ? (
-                  <button className="icon-btn audio-ok" onClick={() => play(l.audio!.src)} title="音声を再生">
-                    ▶ {l.audio.durationSec.toFixed(1)}s
-                  </button>
-                ) : (
-                  <span className="audio-stale" title="「ナレーション生成」で作成されます">● 音声なし</span>
-                )
+                <>
+                  {l.audio ? (
+                    <button className={`icon-btn ${stale ? '' : 'audio-ok'}`} onClick={() => play(l.audio!.src)} title={stale ? '再生（文言や声を変えたので、いまの内容とは違います）' : '音声を再生'}>
+                      <Ic n={Play} size={12} />
+                      {l.audio.durationSec.toFixed(1)}s
+                    </button>
+                  ) : null}
+                  {stale ? <span className="audio-stale">
+                      <Ic n={Circle} size={8} mr={3} />
+                      {l.audio ? '要作り直し' : '音声なし'}</span> : null}
+                  {runJob ? (
+                    <button className="icon-btn" disabled={!tts.ready || !(l.text.trim() || l.speak?.trim())} onClick={() => redo(l.id)} title="このセリフだけ音声を作り直して、すぐ再生します">
+                      <Ic n={RefreshCw} size={12} />
+                      {l.audio ? '作り直す' : '作る'}
+                    </button>
+                  ) : null}
+                </>
               ) : null}
               <div className="spacer" />
               {lt ? <span className="faint">{(lt.start / project.fps).toFixed(1)}s〜</span> : null}
@@ -211,10 +267,10 @@ const LinesEditor: React.FC<{ project: Project; index: number; update: Update; t
                   })
                 }
               >
-                ▲
+                <Ic n={ChevronUp} mr={0} />
               </button>
               <button className="icon-btn" title="削除" onClick={() => update((p) => void p.scenes[index].lines.splice(li, 1))}>
-                ✕
+                <Ic n={X} mr={0} />
               </button>
             </div>
             <Text value={l.text} onChange={(v) => setLine(li, { text: v })} multiline />
@@ -235,6 +291,54 @@ const LinesEditor: React.FC<{ project: Project; index: number; update: Update; t
                 <Select value={l.pose ?? ''} onChange={(v) => setLine(li, { pose: (v || undefined) as Line['pose'] })} options={[{ value: '', label: '変えない' }, ...POSES.map((p) => ({ value: p, label: POSE_LABELS[p] }))]} />
               </Field>
             </div>
+            {l.style === 'bubble' || l.style === 'bubble-accent' ? (
+              <Field label="吹き出しのしっぽ" hint="位置と向きは、プレビューの「直接調整」で吹き出しを選び、オレンジの点をドラッグして変えられます">
+                <div className="chips">
+                  {(() => {
+                    // しっぽは画面の形（縦型・正方形・横型）ごとに持つ
+                    const key = `line:${l.id}`;
+                    const t = readAdjust(scene, key, project.format).tail;
+                    const setTail = (tail: { dx: number; dy: number; hidden?: boolean } | undefined) =>
+                      update((p) => {
+                        const sc = p.scenes[index];
+                        const map = { ...sceneLayout(sc, p.format) };
+                        const next = normalizeAdjust({ ...readAdjust(sc, key, p.format), tail });
+                        if (next) map[key] = next;
+                        else delete map[key];
+                        setSceneLayout(sc, p.format, map);
+                      });
+                    return (
+                      <>
+                        <button className={`chip ${!t?.hidden ? 'on' : ''}`} onClick={() => setTail({ dx: t?.dx ?? 0, dy: t?.dy ?? 0 })}>
+                          あり
+                        </button>
+                        <button className={`chip ${t?.hidden ? 'on' : ''}`} onClick={() => setTail({ dx: t?.dx ?? 0, dy: t?.dy ?? 0, hidden: true })}>
+                          なし
+                        </button>
+                        <button className="chip" disabled={!t} onClick={() => setTail(undefined)}>
+                          位置を戻す
+                        </button>
+                      </>
+                    );
+                  })()}
+                </div>
+              </Field>
+            ) : null}
+            {ttsFor(meta, project.audio.ttsProvider).provider === 'irodori' ? (
+              <Field label="感情（Irodori-TTS）" hint="セリフの前に付く絵文字で、声の調子が変わります。効き方は文脈によって変わります">
+                <div className="chips">
+                  <button className={`chip ${!l.emoji ? 'on' : ''}`} onClick={() => setLine(li, { emoji: undefined })}>
+                    なし
+                  </button>
+                  {IRODORI_EMOJI.map((e) => (
+                    <button key={e.emoji} className={`chip ${l.emoji === e.emoji ? 'on' : ''}`} title={e.label} onClick={() => setLine(li, { emoji: e.emoji })}>
+                      {e.emoji}
+                      <span className="faint">{e.label}</span>
+                    </button>
+                  ))}
+                </div>
+              </Field>
+            ) : null}
             <Field label="演技指示（任意）" hint="声の感情。例: 驚いて／困って小声で／ワクワクして。棒読み対策に効果的です">
               <Text value={l.delivery} onChange={(v) => setLine(li, { delivery: v || undefined })} />
             </Field>
@@ -252,7 +356,7 @@ const LinesEditor: React.FC<{ project: Project; index: number; update: Update; t
           )
         }
       >
-        ＋ セリフを追加
+        <Ic n={Plus} />セリフを追加
       </button>
     </div>
   );
@@ -273,7 +377,7 @@ const CharactersEditor: React.FC<{ project: Project; index: number; update: Upda
             <div className="spacer" />
             <Toggle checked={c.flip} onChange={(v) => setC(ci, { flip: v })} label={<span className="faint">左右反転</span>} />
             <button className="icon-btn" title="削除" onClick={() => update((p) => void p.scenes[index].characters.splice(ci, 1))}>
-              ✕
+              <Ic n={X} mr={0} />
             </button>
           </div>
           <div className="row tight">
@@ -344,7 +448,7 @@ const CharactersEditor: React.FC<{ project: Project; index: number; update: Upda
             )
           }
         >
-          ＋ キャラを追加
+          <Ic n={Plus} />キャラを追加
         </button>
       ) : (
         <div className="faint">「キャラ・声」タブでキャラクターを追加してください</div>
@@ -361,7 +465,8 @@ const VISUAL_KINDS: { value: Visual['kind']; label: string }[] = [
   { value: 'jump', label: '障壁を飛び越える' },
   { value: 'counter', label: '数字カウントアップ' },
   { value: 'compare', label: 'Before → After' },
-  { value: 'image', label: '画像' },
+  { value: 'image', label: 'イラスト・画像（AIで生成可）' },
+  { value: 'screen', label: '実際の画面（スクリーンショット）' },
 ];
 
 const defaultVisual = (kind: Visual['kind']): Visual => {
@@ -380,12 +485,15 @@ const defaultVisual = (kind: Visual['kind']): Visual => {
       return { kind, before: { icon: 'document', label: 'これまで' }, after: { icon: 'phone', label: 'これから' } };
     case 'image':
       return { kind, src: '' };
+    case 'screen':
+      return { kind, src: '', frame: 'browser' };
     default:
       return { kind: 'none' };
   }
 };
 
-const VisualEditor: React.FC<{ projectId: string; visual: Visual; onChange: (v: Visual) => void }> = ({ projectId, visual, onChange }) => {
+const VisualEditor: React.FC<{ projectId: string; sceneId: string; visual: Visual; onChange: (v: Visual) => void; runJob?: RunJob }> = ({ projectId, sceneId, visual, onChange, runJob }) => {
+  const meta = useContext(MetaContext)!;
   const v = visual as Visual & Record<string, unknown>;
   const patch = (p: Record<string, unknown>) => onChange({ ...visual, ...p } as Visual);
   const icon = (key: string) => (
@@ -439,13 +547,13 @@ const VisualEditor: React.FC<{ projectId: string; visual: Visual; onChange: (v: 
                 <Text value={it.label} onChange={(x) => patch({ items: visual.items.map((o, j) => (j === i ? { ...o, label: x } : o)) })} />
               </Field>
               <button className="icon-btn" style={{ flex: 'none', marginTop: 6 }} onClick={() => visual.items.length > 1 && patch({ items: visual.items.filter((_, j) => j !== i) })}>
-                ✕
+                <Ic n={X} mr={0} />
               </button>
             </div>
           ))}
           {visual.items.length < 3 ? (
             <button className="btn sm" onClick={() => patch({ items: [...visual.items, { icon: 'star', label: 'ポイント' }] })}>
-              ＋ アイコン
+              <Ic n={Plus} />アイコン
             </button>
           ) : null}
         </>
@@ -513,11 +621,41 @@ const VisualEditor: React.FC<{ projectId: string; visual: Visual; onChange: (v: 
         </>
       ) : null}
       {visual.kind === 'image' ? (
-        <div className="row center">
-          {visual.src ? <img src={`/files/${projectId}/${visual.src}`} alt="" style={{ height: 60, flex: 'none', objectFit: 'contain' }} /> : <span className="faint">未設定</span>}
-          <FilePick accept="image/*" onFile={async (f) => patch({ src: (await api.upload(projectId, f)).path })}>
-            画像をアップロード
+        <>
+          <Field label="イラストの内容（AIへの指示）" hint="解決した後の場面を具体的に。例: 受付でスタッフがタブレットで来場者の参加履歴を確認し、笑顔でうなずいている">
+            <Text value={visual.prompt} onChange={(x) => patch({ prompt: x || undefined })} multiline />
+          </Field>
+          <div className="row center tight" style={{ flexWrap: 'wrap' }}>
+            {visual.src ? <img src={`/files/${projectId}/${visual.src}`} alt="" style={{ height: 72, flex: 'none', objectFit: 'contain', borderRadius: 8, background: '#fff' }} /> : <span className="faint">未設定</span>}
+            <button
+              className="btn sm primary"
+              style={{ flex: 'none' }}
+              disabled={!meta.openai || !runJob || !visual.prompt?.trim()}
+              title={!visual.prompt?.trim() ? 'イラストの内容を入力してください' : ''}
+              onClick={() => runJob?.('イラストを描いています（約20秒）', `/api/projects/${projectId}/illustrations`, { sceneIds: [sceneId] })}
+            >
+              <Ic n={Sparkles} />
+              {visual.src ? 'AIで描き直す' : 'AIで描く'}
+            </button>
+            <FilePick accept="image/*" onFile={async (f) => patch({ src: (await api.upload(projectId, f)).path })}>
+              画像をアップロード
+            </FilePick>
+          </div>
+        </>
+      ) : null}
+      {visual.kind === 'screen' ? (
+        <div className="row center tight" style={{ flexWrap: 'wrap' }}>
+          {visual.src && !visual.src.startsWith('ui:') ? <img src={`/files/${projectId}/${visual.src}`} alt="" style={{ height: 72, flex: 'none', objectFit: 'contain' }} /> : <span className="faint">未設定</span>}
+          <FilePick
+            accept="image/*"
+            onFile={async (f) => {
+              const { path, size } = await api.upload(projectId, f);
+              patch({ src: path, size, frame: size && size.h > size.w * 1.2 ? 'phone' : 'browser' });
+            }}
+          >
+            スクリーンショットを選ぶ
           </FilePick>
+          <Select value={visual.frame} onChange={(x) => patch({ frame: x })} options={[{ value: 'browser', label: 'PC（ブラウザ枠）' }, { value: 'phone', label: 'スマホ枠' }]} />
         </div>
       ) : null}
     </div>

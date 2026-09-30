@@ -1,3 +1,4 @@
+import { errorDialog } from './Dialogs';
 import React, { useEffect, useRef, useState } from 'react';
 
 export const Field: React.FC<{ label?: React.ReactNode; hint?: React.ReactNode; children: React.ReactNode; style?: React.CSSProperties }> = ({
@@ -123,7 +124,7 @@ export function Seg<T extends string>({ value, onChange, options }: { value: T; 
   );
 }
 
-export const FilePick: React.FC<{ accept: string; onFile: (f: File) => void; children: React.ReactNode; className?: string }> = ({
+export const FilePick: React.FC<{ accept: string; onFile: (f: File) => void | Promise<unknown>; children: React.ReactNode; className?: string }> = ({
   accept,
   onFile,
   children,
@@ -142,7 +143,8 @@ export const FilePick: React.FC<{ accept: string; onFile: (f: File) => void; chi
         style={{ display: 'none' }}
         onChange={(e) => {
           const f = e.target.files?.[0];
-          if (f) onFile(f);
+          // アップロードの失敗（大きすぎるファイル・通信エラーなど）を黙って捨てない
+          if (f) Promise.resolve(onFile(f)).catch((err) => errorDialog('ファイルを読み込めませんでした', err));
           e.target.value = '';
         }}
       />

@@ -1,12 +1,11 @@
 import type { Project, Scene } from './schema';
-import { stripMarkup, type SceneTiming, type Timeline } from './timeline';
+import { speechOnset, stripMarkup, TRANSITION_COVER, type SceneTiming, type Timeline } from './timeline';
 import { WIPE_CUT } from './components/Transitions';
 import { visualTimes } from './visuals/timing';
 
 export type SfxKind = 'pop' | 'whoosh' | 'impact' | 'ding' | 'coin' | 'sparkle' | 'thud' | 'swish';
 export type SfxEvent = { frame: number; kind: SfxKind; volume?: number };
 
-const ENTER_OFFSET: Record<Scene['transition'], number> = { wipe: 5, flash: 2, zoom: 3, slide: 4, cut: 0 };
 
 const norm = (s: string) => stripMarkup(s).replace(/[\s、。！？!?…「」『』〜ー~・,.]/g, '');
 
@@ -36,7 +35,9 @@ export type SceneKeys = {
 /** シーン内の演出タイミング（フレーム・シーン先頭基準） */
 export const sceneKeys = (st: SceneTiming, project: Project): SceneKeys => {
   const s = st.scene;
-  const enterOffset = st.index === 0 ? 0 : ENTER_OFFSET[s.transition];
+  const enterOffset = st.index === 0 ? 0 : TRANSITION_COVER[s.transition].in;
+  // 声が実際に出るフレーム（音声ファイル先頭の無音ぶん遅れる）
+  const on = speechOnset(project.fps);
   let logoAt = enterOffset + 3;
   let eyebrowAt = enterOffset + 2;
   let headAt = enterOffset + 12;
@@ -49,19 +50,28 @@ export const sceneKeys = (st: SceneTiming, project: Project): SceneKeys => {
       // 「だったら、〇〇！」のように名前は文末に来ることが多い
       const idx = norm(l.line.text).indexOf(name);
       const ratio = Math.min(0.85, idx / Math.max(1, norm(l.line.text).length));
-      logoAt = Math.max(enterOffset + 2, Math.round(l.start + (l.end - l.start) * ratio) - 2);
+      logoAt = Math.max(enterOffset + 2, Math.round(l.start + on + (l.end - l.start - on) * ratio) - 1);
     }
   }
   if (s.type === 'feature') {
     const eb = findLineFor(st, s.eyebrow);
-    if (eb) eyebrowAt = Math.max(enterOffset, eb.start - 2);
-    const hl = findLineFor(st, s.headline, eb ? eb.start : -1);
-    if (hl) headAt = Math.max(eyebrowAt + 6, hl.start - 1);
+    if (eb) eyebrowAt = Math.max(enterOffset, eb.start + on - 1);
+    // 1行目と見出しを続けて1つのセリフで読む場合は、文中で見出しの言葉が出てくる位置に合わせて叩きつける
+    const both = eb && norm(eb.line.text).includes(norm(s.headline)) && norm(eb.line.text).includes(norm(s.eyebrow)) ? eb : undefined;
+    const hl = both ? undefined : findLineFor(st, s.headline, eb ? eb.start : -1);
+    if (both) {
+      const t = norm(both.line.text);
+      const ratio = Math.min(0.9, t.lastIndexOf(norm(s.headline)) / Math.max(1, t.length));
+      headAt = Math.max(eyebrowAt + 6, Math.round(both.start + on + (both.end - both.start - on) * ratio));
+    } else if (hl) headAt = Math.max(eyebrowAt + 6, hl.start + on);
     else headAt = eb ? Math.max(eyebrowAt + 8, Math.round(eb.end - 2)) : eyebrowAt + 12;
   }
-  if (s.type === 'talk' && s.prop) {
+  if (s.type === 'talk' && s.prop?.image) {
+    // 図解は課題の説明そのものなので、シーンの頭から見せる
+    propAt = enterOffset + 4;
+  } else if (s.type === 'talk' && s.prop) {
     const second = st.lines[1] ?? st.lines[0];
-    propAt = second ? Math.max(enterOffset + 4, second.start - 10) : enterOffset + 10;
+    propAt = second ? Math.max(enterOffset + 4, second.start + on - 8) : enterOffset + 10;
   }
   const visualAt = s.type === 'feature' ? Math.min(eyebrowAt + 6, headAt) : s.type === 'showcase' ? enterOffset + 4 : headAt;
   return { enterOffset, logoAt, eyebrowAt, headAt, visualAt, payoffAt: headAt, propAt };
@@ -80,7 +90,7 @@ export const collectSfx = (timeline: Timeline, project: Project): SfxEvent[] => 
       else if (s.transition === 'flash') at(0, 'sparkle', 0.6);
     }
     for (const l of st.lines) {
-      if (l.line.style === 'bubble' || l.line.style === 'bubble-accent') at(l.start, 'pop', 0.55);
+      if (l.line.style === 'bubble' || l.line.style === 'bubble-accent') at(l.start + speechOnset(project.fps) - 1, 'pop', 0.55);
     }
     for (const c of s.characters) {
       if (c.enter === 'jump' || c.enter === 'slide') at(k.enterOffset + Math.round(c.enterDelaySec * project.fps), 'swish', 0.35);

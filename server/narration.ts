@@ -1,17 +1,19 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { Project } from '../src/video/schema';
-import { lineHash, speechText, synthesizeToFile, voiceFor } from './ai/tts';
+import { lineHash, resolveProvider, speechText, synthesizeToFile, voiceFor } from './ai/tts';
 
 export type NarrationProgress = (done: number, total: number, message: string) => void;
 
 /** 音声が古い／無いセリフを数える */
-export const staleLines = (project: Project, force = false) => {
+export const staleLines = (project: Project, force = false, only?: string[]) => {
   const out: { sceneIndex: number; lineIndex: number; hash: string }[] = [];
+  const provider = resolveProvider(project.audio.ttsProvider);
   project.scenes.forEach((s, si) =>
     s.lines.forEach((l, li) => {
       if (!speechText(l).trim()) return;
-      const hash = lineHash(l, voiceFor(l.speaker, project.cast));
+      if (only && !only.includes(l.id)) return;
+      const hash = lineHash(l, voiceFor(l.speaker, project.cast), provider);
       if (force || !l.audio || l.audio.hash !== hash) out.push({ sceneIndex: si, lineIndex: li, hash });
     }),
   );
@@ -19,15 +21,18 @@ export const staleLines = (project: Project, force = false) => {
 };
 
 /**
- * 全セリフのナレーションを OpenAI TTS で生成（変更のあったセリフだけ）。
+ * 全セリフのナレーションを生成（OpenAI TTS または Irodori-TTS）（変更のあったセリフだけ）。
  * 音声は <projectDir>/audio/<lineId>-<hash>.wav に保存され、project に書き戻される。
  */
 export const generateNarration = async (
   project: Project,
   projectDir: string,
-  { force = false, concurrency = 4, onProgress }: { force?: boolean; concurrency?: number; onProgress?: NarrationProgress } = {},
+  { force = false, only, concurrency, onProgress }: { force?: boolean; only?: string[]; concurrency?: number; onProgress?: NarrationProgress } = {},
 ) => {
-  const todo = staleLines(project, force);
+  const provider = resolveProvider(project.audio.ttsProvider);
+  // Irodori-TTS のサーバーは 1 件ずつ処理する（並列にしても速くならない）
+  concurrency ??= provider === 'irodori' ? 1 : 4;
+  const todo = staleLines(project, force, only);
   let done = 0;
   onProgress?.(0, todo.length, '音声を生成しています');
   const queue = [...todo];
@@ -37,9 +42,10 @@ export const generateNarration = async (
       const item = queue.shift()!;
       const line = project.scenes[item.sceneIndex].lines[item.lineIndex];
       const voice = voiceFor(line.speaker, project.cast);
-      const rel = `audio/${line.id}-${item.hash}.wav`;
+      // 作り直しても同じ名前だと、ブラウザが古い音声を使い回すことがあるので、毎回別名にする
+      const rel = `audio/${line.id}-${item.hash}-${Math.random().toString(36).slice(2, 7)}.wav`;
       try {
-        const { durationSec, mouth } = await synthesizeToFile(speechText(line), voice, path.join(projectDir, rel), line.delivery);
+        const { durationSec, mouth } = await synthesizeToFile(speechText(line), voice, path.join(projectDir, rel), { delivery: line.delivery, emoji: line.emoji, provider });
         line.audio = { src: rel, durationSec, hash: item.hash, mouth };
       } catch (e) {
         errors.push(`${line.text}: ${(e as Error).message}`);

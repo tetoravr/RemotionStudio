@@ -1,11 +1,18 @@
-import React from 'react';
+import React, { useContext } from 'react';
 import type { Project } from '../../video/schema';
-import { api } from '../api';
+import { api, ttsFor } from '../api';
+import { MetaContext } from '../App';
 import type { RunJob, Update } from '../pages/Editor';
 import { Field, FilePick, Num, Slider, Toggle } from './Fields';
+import { NarrationList } from './NarrationList';
+import { CircleCheck, Music } from 'lucide-react';
+import { Ic } from '../icons';
 
-export const AudioPanel: React.FC<{ project: Project; update: Update; runJob: RunJob }> = ({ project, update, runJob }) => {
+export const AudioPanel: React.FC<{ project: Project; update: Update; runJob: RunJob; onSelectScene?: (i: number) => void }> = ({ project, update, runJob, onSelectScene }) => {
   const a = project.audio;
+  const meta = useContext(MetaContext)!;
+  const tts = ttsFor(meta, a.ttsProvider);
+  const ir = meta.tts.irodori;
   const bgmMode = a.bgm === 'none' ? 'none' : a.bgm ? 'custom' : 'default';
   return (
     <div>
@@ -26,7 +33,14 @@ export const AudioPanel: React.FC<{ project: Project; update: Update; runJob: Ru
               update((p) => void (p.audio.bgm = path));
             }}
           >
-            {bgmMode === 'custom' ? `🎵 ${a.bgm!.split('/').pop()}` : 'ファイルをアップロード'}
+            {bgmMode === 'custom' ? (
+              <>
+                <Ic n={Music} />
+                {a.bgm!.split('/').pop()}
+              </>
+            ) : (
+              'ファイルをアップロード'
+            )}
           </FilePick>
         </div>
         <Field label="BGM音量（セリフ中は自動で下がります）">
@@ -48,20 +62,33 @@ export const AudioPanel: React.FC<{ project: Project; update: Update; runJob: Ru
         <div className="section-title">ナレーション・字幕</div>
         <Toggle checked={a.narration} onChange={(v) => update((p) => void (p.audio.narration = v))} label="セリフを音声で読み上げる" />
         <div style={{ height: 10 }} />
+        <Field label="音声合成エンジン" hint="声は Irodori-TTS を使います（ローカルで動かします。GPU推奨）">
+          <div className="chips">
+            <button className="chip on">Irodori-TTS</button>
+          </div>
+        </Field>
+        {tts.provider === 'irodori' ? (
+          ir.online ? (
+            <div className="notice" style={{ marginBottom: 10 }}>
+              <Ic n={CircleCheck} />Irodori-TTS に接続中（{ir.url} ／ {ir.checkpoint?.split('/').pop() ?? 'モデル不明'} ／ {ir.device ?? '?'}）
+              {ir.device === 'cpu' ? ' — GPUなしのため1セリフの生成に30〜60秒かかります' : ''}
+            </div>
+          ) : (
+            <div className="error" style={{ marginBottom: 10 }}>
+              Irodori-TTS サーバー（{ir.url}）に接続できません。ターミナルで <code>npm run irodori</code> を実行して起動してから、このページを開き直してください。
+            </div>
+          )
+        ) : !meta.openai ? (
+          <div className="error" style={{ marginBottom: 10 }}>OPENAI_API_KEY が未設定です。</div>
+        ) : null}
         <Field label="ナレーション音量">
           <Slider value={a.narrationVolume} min={0} max={1} onChange={(v) => update((p) => void (p.audio.narrationVolume = v))} />
         </Field>
         <Toggle checked={project.subtitles} onChange={(v) => update((p) => void (p.subtitles = v))} label="全セリフを字幕でも表示（音なし再生対策）" />
-        <div style={{ height: 12 }} />
-        <button
-          className="btn sm"
-          onClick={() =>
-            confirm('すべてのセリフの音声を作り直しますか？') &&
-            runJob('ナレーションを作り直しています', `/api/projects/${project.id}/narration`, { force: true })
-          }
-        >
-          すべての音声を作り直す
-        </button>
+      </div>
+      <div className="section">
+        <div className="section-title">ナレーションの確認・作り直し</div>
+        <NarrationList project={project} runJob={runJob} onSelectScene={onSelectScene} />
       </div>
       <div className="section">
         <div className="section-title">動画</div>
