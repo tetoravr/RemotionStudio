@@ -8,6 +8,7 @@ import { blankProject, DEFAULT_CAST } from '../src/video/templates';
 import { LIBRARY_CHARACTERS } from '../src/video/library';
 import { STYLE_PRESETS } from './ai/images';
 import { attachScreenshots, generateStoryboard, reviseStoryboard, type Brief, type ScreenshotRef } from './ai/storyboard';
+import { candidateFile, createCandidate, deleteVoice, registerVoice } from './ai/voices';
 import { engineId, irodoriStatus, OPENAI_VOICES, resolveProvider, synthesizeToFile } from './ai/tts';
 import { generateCharacter, type CharacterRequest } from './characters';
 import { config, hasOpenAI, ROOT } from './env';
@@ -313,6 +314,74 @@ app.post(
     } finally {
       fs.rmSync(tmp, { force: true });
     }
+  }),
+);
+
+// ---------- 参照音声（声の固定） ----------
+/** Voice Design で声の候補を1本つくる（seed を変えるたびに別の声になる） */
+app.post(
+  '/api/tts/voice-candidates',
+  h(async (req, res) => {
+    const { caption = '', text, seed } = req.body ?? {};
+    const sample = String(text ?? '').trim().slice(0, 200);
+    if (!sample) {
+      res.status(400).json({ error: '試し読みのテキストを入力してください' });
+      return;
+    }
+    const c = await createCandidate({ caption: String(caption), text: sample, seed: Number.isInteger(seed) ? seed : undefined });
+    res.json({ ...c, url: `/api/tts/voice-candidates/${c.id}.wav` });
+  }),
+);
+
+app.get('/api/tts/voice-candidates/:file', (req, res) => {
+  const file = candidateFile(param(req, 'file').replace(/\.wav$/, ''));
+  if (!file || !fs.existsSync(file)) {
+    res.status(404).json({ error: 'candidate not found' });
+    return;
+  }
+  res.type('audio/wav').send(fs.readFileSync(file));
+});
+
+/** 気に入った候補を、全編で使う参照音声として登録する */
+app.post(
+  '/api/tts/voices',
+  h(async (req, res) => {
+    const { candidateId, name, label, caption, text, seed } = req.body ?? {};
+    const file = candidateFile(String(candidateId));
+    if (!file || !fs.existsSync(file)) {
+      res.status(400).json({ error: '候補の音声が見つかりません。もう一度つくり直してください' });
+      return;
+    }
+    res.json(await registerVoice({ name: String(name ?? ''), label, audio: fs.readFileSync(file), caption, text, seed }));
+  }),
+);
+
+/** 手持ちの音声ファイルを参照音声として登録する */
+app.post(
+  '/api/tts/voices/upload',
+  upload.single('file'),
+  h(async (req, res) => {
+    if (!req.file) {
+      res.status(400).json({ error: 'ファイルがありません' });
+      return;
+    }
+    const original = Buffer.from(req.file.originalname, 'latin1').toString('utf8');
+    res.json(
+      await registerVoice({
+        name: String(req.body?.name ?? ''),
+        label: String(req.body?.label ?? '') || path.parse(original).name,
+        audio: req.file.buffer,
+        ext: path.extname(original),
+      }),
+    );
+  }),
+);
+
+app.delete(
+  '/api/tts/voices/:id',
+  h(async (req, res) => {
+    await deleteVoice(param(req, 'id'));
+    res.json({ ok: true });
   }),
 );
 

@@ -58,6 +58,9 @@ button { font: inherit; }
 .row.tight { gap: 6px; }
 .row.center { align-items: center; }
 .spacer { flex: 1; }
+.voice-actions { flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.voice-actions > *, .voice-cand > .btn, .voice-cand > .faint { flex: 0 0 auto; white-space: nowrap; }
+.voice-cand { flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
 .muted { color: var(--muted); }
 .faint { color: var(--faint); font-size: 12px; }
 

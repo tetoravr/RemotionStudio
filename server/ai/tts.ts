@@ -7,6 +7,7 @@ import type { AudioSettings, CastMember, Line } from '../../src/video/schema';
 import { config } from '../env';
 import { runFfmpeg, wavDurationSec } from '../ffmpeg';
 import { getOpenAI } from './client';
+import { ensureVoice, localVoices } from './voices';
 
 export const OPENAI_VOICES = [
   { id: 'coral', label: 'Coral（明るい女性）' },
@@ -42,13 +43,14 @@ export const engineId = (provider: TtsProvider) => (provider === 'irodori' ? `ir
 
 export const lineHash = (line: Line, voice: CastMember['voice'], provider: TtsProvider) => narrationHash(line, voice, engineId(provider));
 
-const irodoriBase = () => config.tts.irodoriUrl || IRODORI_FALLBACK_URL;
-const irodoriHeaders = (): Record<string, string> => ({
-  'Content-Type': 'application/json',
+export const irodoriBase = () => config.tts.irodoriUrl || IRODORI_FALLBACK_URL;
+/** json=false は multipart 送信用（Content-Type は fetch に任せる） */
+export const irodoriHeaders = (json = true): Record<string, string> => ({
+  ...(json ? { 'Content-Type': 'application/json' } : {}),
   ...(config.tts.irodoriKey ? { Authorization: `Bearer ${config.tts.irodoriKey}` } : {}),
 });
 
-export type IrodoriStatus = { online: boolean; url: string; checkpoint?: string; device?: string; voices: string[]; error?: string };
+export type IrodoriStatus = { online: boolean; url: string; checkpoint?: string; device?: string; voices: string[]; labels?: Record<string, string>; error?: string };
 
 /** Irodori-TTS サーバーの状態（エディターの表示用） */
 export const irodoriStatus = async (): Promise<IrodoriStatus> => {
@@ -68,7 +70,10 @@ export const irodoriStatus = async (): Promise<IrodoriStatus> => {
     } catch {
       /* 参照音声の一覧は無くても動く */
     }
-    return { online: true, url, checkpoint: health.model?.hf_checkpoint, device: health.model?.model_device, voices };
+    // このアプリで作った参照音声は、サーバーから消えていても合成時に控えから再登録される
+    const local = await localVoices();
+    voices = [...new Set([...voices, ...local.map((v) => v.id)])];
+    return { online: true, url, checkpoint: health.model?.hf_checkpoint, device: health.model?.model_device, voices, labels: Object.fromEntries(local.map((v) => [v.id, v.label])) };
   } catch (e) {
     return { online: false, url, voices: [], error: (e as Error).message };
   }
@@ -243,23 +248,33 @@ const synthIrodori = async (text: string, voice: CastMember['voice'], opts: Synt
   // 話速はモデル自身に任せる（時間を伸縮するより自然）。1 より小さいほど速く話す
   const speed = voice.speed || 1;
   if (Math.abs(speed - 1) >= 0.03) irodori.duration_scale = Math.min(1.5, Math.max(0.5, 1 / speed));
-  let res: Response;
-  try {
-    res = await fetch(`${irodoriBase()}/v1/audio/speech`, {
+  const refVoice = voice.refVoice || 'none';
+  await ensureVoice(refVoice);
+  const request = () =>
+    fetch(`${irodoriBase()}/v1/audio/speech`, {
       method: 'POST',
       headers: irodoriHeaders(),
       body: JSON.stringify({
         model: config.tts.irodoriModel,
         input: `${opts.emoji ?? ''}${text}`,
-        voice: voice.refVoice || 'none',
+        voice: refVoice,
         response_format: 'wav',
         irodori,
       }),
       signal: AbortSignal.timeout(config.tts.irodoriTimeoutMs),
     });
+  let res: Response;
+  try {
+    res = await request();
+    // Irodori 側の参照音声が消えていたら（サーバーの入れ替えなど）、控えから登録し直して1回だけやり直す
+    if (res.status === 400 && refVoice !== 'none') {
+      await ensureVoice(refVoice, true);
+      res = await request();
+    }
   } catch (e) {
     throw new Error(
-      `Irodori-TTS サーバーに接続できません（${irodoriBase()}）。scripts/start-irodori.sh で起動してください。\n${(e as Error).message}`,
+      `Irodori-TTS サーバーに接続できません（${irodoriBase()}）。scripts/start-irodori.sh で起動してください。
+${(e as Error).message}`,
     );
   }
   if (!res.ok) throw new Error(`Irodori-TTS がエラーを返しました (${res.status}): ${(await res.text()).slice(0, 300)}`);

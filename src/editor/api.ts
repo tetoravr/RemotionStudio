@@ -7,7 +7,7 @@ export type Meta = {
   tts: {
     default: TtsProvider;
     engines: Record<TtsProvider, string>;
-    irodori: { online: boolean; url: string; checkpoint?: string; device?: string; voices: string[]; error?: string };
+    irodori: { online: boolean; url: string; checkpoint?: string; device?: string; voices: string[]; labels?: Record<string, string>; error?: string };
   };
   voices: { id: string; label: string }[];
   icons: string[];
@@ -74,6 +74,20 @@ export const api = {
   post: (url: string, body: unknown = {}) =>
     fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then((r) => json<{ jobId: string }>(r)),
   job: (id: string) => fetch(`/api/jobs/${id}`).then((r) => json<Job>(r)),
+  voiceCandidate: (body: { caption: string; text: string; seed?: number }) =>
+    fetch('/api/tts/voice-candidates', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then((r) =>
+      json<{ id: string; seed: number; durationSec: number; url: string }>(r),
+    ),
+  adoptVoice: (body: { candidateId: string; name: string; label: string; caption: string; text: string; seed: number }) =>
+    fetch('/api/tts/voices', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then((r) => json<{ id: string; label: string }>(r)),
+  uploadVoice: (file: File, name: string, label: string) => {
+    const fd = new FormData();
+    fd.append('name', name);
+    fd.append('label', label);
+    fd.append('file', file);
+    return fetch('/api/tts/voices/upload', { method: 'POST', body: fd }).then((r) => json<{ id: string; label: string }>(r));
+  },
+  deleteVoice: (id: string) => fetch(`/api/tts/voices/${id}`, { method: 'DELETE' }).then((r) => json<{ ok: boolean }>(r)),
   ttsPreview: async (text: string, voice: Project['cast'][number]['voice'], opts: { delivery?: string; emoji?: string; provider?: TtsProvider } = {}) => {
     const r = await fetch('/api/tts/preview', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, voice, ...opts }) });
     if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || '試聴に失敗しました');

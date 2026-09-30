@@ -9,6 +9,8 @@ export const config = {
   host: process.env.HOST || '127.0.0.1',
   projectsDir: path.resolve(ROOT, process.env.PROJECTS_DIR || 'projects'),
   publicDir: path.resolve(ROOT, 'public'),
+  /** 参照音声の控え。Irodori サーバー側の voices が消えても、ここから自動で再登録する */
+  voicesDir: path.resolve(ROOT, process.env.VOICES_DIR || 'voices'),
   openaiKey: process.env.OPENAI_API_KEY || '',
   models: {
     text: process.env.OPENAI_TEXT_MODEL || 'gpt-5.5',

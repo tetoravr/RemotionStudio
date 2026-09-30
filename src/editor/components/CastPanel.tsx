@@ -4,6 +4,7 @@ import { POSES, type CastMember, type Pose, type Project } from '../../video/sch
 import { api, ttsFor } from '../api';
 import { MetaContext } from '../App';
 import type { RunJob, Update } from '../pages/Editor';
+import { VoiceLab } from './VoiceLab';
 import { Field, FilePick, Num, Select, Slider, Text } from './Fields';
 import { POSE_LABELS } from './SceneInspector';
 
@@ -234,13 +235,14 @@ const CastCard: React.FC<{ project: Project; member: CastMember; index: number; 
                 <Select
                   value={c.voice.refVoice ?? ''}
                   onChange={(v) => set((m) => void (m.voice.refVoice = v || undefined))}
-                  options={[{ value: '', label: 'なし（キャプション＋シードで声を作る）' }, ...meta.tts.irodori.voices.map((v) => ({ value: v, label: v }))]}
+                  options={[{ value: '', label: 'なし（キャプション＋シードで声を作る）' }, ...meta.tts.irodori.voices.map((v) => ({ value: v, label: meta.tts.irodori.labels?.[v] ?? v }))]}
                 />
               </Field>
             </div>
             <Field label="話速" hint="1.0が標準。上げると、モデル自身が速く話します（音が不自然になりにくい）。セリフごとの感情は、シーンの「感情」「演技指示」で指定できます">
               <Slider value={c.voice.speed} min={0.8} max={1.3} step={0.01} onChange={(v) => set((m) => void (m.voice.speed = v))} format={(v) => `×${v.toFixed(2)}`} />
             </Field>
+            <VoiceLab member={c} set={set} />
           </>
         ) : (
           <>
