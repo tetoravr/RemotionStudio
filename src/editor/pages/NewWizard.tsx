@@ -1,10 +1,9 @@
-import { Plus } from 'lucide-react';
-import React, { useState } from 'react';
+import { ArrowRight, ChevronLeft, FileText, ImagePlus, Sparkles, Upload, X } from 'lucide-react';
+import React, { useRef, useState } from 'react';
 import type { Project } from '../../video/schema';
 import { api, waitJob, type Job } from '../api';
 import { go } from '../App';
-import { Field, FilePick, Progress, Seg, Text } from '../components/Fields';
-import { ArrowLeft, FileText, Link2, Sparkles, X } from 'lucide-react';
+import { Cell, Progress, Section, Seg, Sheet, Text } from '../components/Fields';
 import { Ic } from '../icons';
 
 type Brief = {
@@ -50,7 +49,50 @@ const EXAMPLE: Brief = {
   notes: '機能ではなく価値を伝える',
 };
 
+const STEPS = ['素材', '内容', '仕上がり'];
+const DOC_ACCEPT = '.pdf,.pptx,.docx,.xlsx,.txt,.md,.csv,.html,.htm,image/*';
+
+/** ファイルをドラッグ＆ドロップ、またはクリックで選ぶ場所 */
+const DropZone: React.FC<{ accept: string; onFiles: (f: File[]) => void; icon: typeof Upload; title: string; sub: string }> = ({ accept, onFiles, icon, title, sub }) => {
+  const input = useRef<HTMLInputElement>(null);
+  const [over, setOver] = useState(false);
+  return (
+    <div
+      className={`dropzone ${over ? 'over' : ''}`}
+      onClick={() => input.current?.click()}
+      onDragOver={(e) => {
+        e.preventDefault();
+        setOver(true);
+      }}
+      onDragLeave={() => setOver(false)}
+      onDrop={(e) => {
+        e.preventDefault();
+        setOver(false);
+        onFiles(Array.from(e.dataTransfer.files));
+      }}
+    >
+      <span className="dz-icon">
+        <Ic n={icon} size={20} mr={0} />
+      </span>
+      <div style={{ fontWeight: 600 }}>{title}</div>
+      <div className="caption">{sub}</div>
+      <input
+        ref={input}
+        type="file"
+        multiple
+        accept={accept}
+        style={{ display: 'none' }}
+        onChange={(e) => {
+          onFiles(Array.from(e.target.files ?? []));
+          e.target.value = '';
+        }}
+      />
+    </div>
+  );
+};
+
 export const NewWizard: React.FC = () => {
+  const [step, setStep] = useState(0);
   const [b, setB] = useState<Brief>(EMPTY);
   const [format, setFormat] = useState<Project['format']>('vertical');
   const [job, setJob] = useState<Job | null>(null);
@@ -63,6 +105,9 @@ export const NewWizard: React.FC = () => {
   const [colors, setColors] = useState<Project['brand']['colors'] | null>(null);
   const [draft, setDraft] = useState<{ sources: { label: string; chars?: number; note?: string }[]; cautions: string[] } | null>(null);
   const [reading, setReading] = useState<Job | null>(null);
+  const set = (k: keyof Brief) => (v: string) => setB((o) => ({ ...o, [k]: v }));
+  const hasSources = Boolean(urls.trim() || docs.length);
+  const canWrite = Boolean(b.productName.trim() && b.oneLiner.trim());
 
   const readSources = async () => {
     setErr(null);
@@ -80,16 +125,28 @@ export const NewWizard: React.FC = () => {
       });
       setColors(r.colors);
       setDraft({ sources: r.sources, cautions: r.cautions });
+      setStep(1);
     } catch (e) {
       setErr((e as Error).message);
     } finally {
       setReading(null);
     }
   };
-  const set = (k: keyof Brief) => (v: string) => setB((o) => ({ ...o, [k]: v }));
+
+  const addShots = async (files: File[]) => {
+    for (const f of files.filter((x) => x.type.startsWith('image/'))) {
+      try {
+        const r = await api.stage(f);
+        setShots((o) => [...o, { staged: r.staged, name: r.name, url: URL.createObjectURL(f) }].slice(0, 4));
+      } catch (e) {
+        setErr((e as Error).message);
+      }
+    }
+  };
 
   const submit = async () => {
     setErr(null);
+    setJob({ id: '', kind: 'storyboard', status: 'running', progress: 0, message: '準備しています' });
     try {
       const { jobId } = await api.post('/api/ai/storyboard', { brief: b, format, colors: colors ?? undefined, screenshots: shots.map((x) => ({ staged: x.staged, name: x.name })) });
       const done = await waitJob(jobId, setJob);
@@ -101,203 +158,287 @@ export const NewWizard: React.FC = () => {
   };
 
   return (
-    <div className="wizard">
-      <div className="row center" style={{ marginBottom: 18 }}>
-        <button className="btn ghost" onClick={() => go('/')} style={{ flex: 'none' }}>
-          <Ic n={ArrowLeft} />戻る
+    <div className="flow">
+      <header className="home-bar" style={{ justifyContent: 'space-between' }}>
+        <button className="btn quiet" onClick={() => go('/')} style={{ marginLeft: -8 }}>
+          <Ic n={ChevronLeft} size={16} mr={0} />
+          プロジェクト
         </button>
-        <h2 style={{ fontSize: 20 }}>AIで広告動画をつくる</h2>
-        <button className="btn sm" style={{ flex: 'none' }} onClick={() => setB(EXAMPLE)}>
-          記入例を入れる
-        </button>
-      </div>
-      <div className="panel" style={{ marginBottom: 16 }}>
-        <h3>
-          <Ic n={Link2} />
-          URL・資料から読み込む（任意）
-        </h3>
-        <div className="muted" style={{ marginBottom: 10, lineHeight: 1.7 }}>
-          商品のWebページや、サービス資料（PDF・PowerPoint・Word・画像など）を読み込むと、AIが下の入力欄を埋めます。内容を確認・修正してから台本を作れます。
-        </div>
-        <Field label="URL（1行に1つ）">
-          <Text value={urls} onChange={setUrls} multiline placeholder="https://example.com/service" />
-        </Field>
-        <Field label="資料ファイル" hint="PDF・PowerPoint（.pptx）・Word（.docx）・Excel（.xlsx）・テキスト・画像。最大10個">
-          <div className="row center" style={{ flexWrap: 'wrap', gap: 8 }}>
-            {docs.map((f, i) => (
-              <span key={`${f.name}-${i}`} className="chip on" style={{ flex: 'none' }}>
-                <Ic n={FileText} size={12} />
-                {f.name}
-                <button className="icon-btn" style={{ marginLeft: 4 }} onClick={() => setDocs((o) => o.filter((_, j) => j !== i))}>
-                  <Ic n={X} size={12} mr={0} />
-                </button>
+        <div className="steps">
+          {STEPS.map((label, i) => (
+            <React.Fragment key={label}>
+              {i ? <span className="line" /> : null}
+              <span className={`step ${i === step ? 'on' : i < step ? 'done' : ''}`}>
+                <span className="n">{i + 1}</span>
+                {label}
               </span>
-            ))}
-            <FilePick accept=".pdf,.pptx,.docx,.xlsx,.txt,.md,.csv,.html,.htm,image/*" onFile={(f) => setDocs((o) => [...o, f].slice(0, 10))}>
-              <Ic n={Plus} />
-              資料を追加
-            </FilePick>
-          </div>
-        </Field>
-        <Field label="補足（任意）" hint="例: 資料に複数の商品がある時は「〇〇について作って」、ターゲットを絞りたい時は「自治体向けに」など">
-          <Text value={hint} onChange={setHint} placeholder="例: トークングラフマーケターについて、観光・地域振興の担当者向けに" />
-        </Field>
-        <div className="row center">
-          <button
-            className="btn primary"
-            style={{ flex: 'none' }}
-            disabled={Boolean(reading) || (!urls.trim() && !docs.length)}
-            onClick={readSources}
-          >
-            <Ic n={Sparkles} />
-            読み込んで入力欄を埋める
-          </button>
-          {reading ? <span className="faint">{reading.message}</span> : null}
+            </React.Fragment>
+          ))}
         </div>
-        {reading ? <Progress value={reading.progress} /> : null}
-        {draft ? (
-          <div className="notice" style={{ marginTop: 12, lineHeight: 1.7 }}>
-            <b>読み込んだ資料</b>
-            {draft.sources.map((x) => (
-              <div key={x.label} className="faint">
-                ・{x.label}
-                {x.note ? `（${x.note}）` : x.chars ? `（${x.chars.toLocaleString()}文字）` : ''}
+        <button className="btn quiet" onClick={() => setB(EXAMPLE)} title="SUSHI TOP OCR の記入例を入れます">
+          記入例を使う
+        </button>
+      </header>
+
+      <main className="flow-main">
+        {step === 0 ? (
+          <>
+            <div className="flow-head">
+              <h1>何を紹介しますか？</h1>
+              <p>
+                商品のWebページや資料を読み込むと、AIが内容をまとめます。
+                <br />
+                手元になければ、そのまま次へ進んで入力できます。
+              </p>
+            </div>
+            <Section title="Webページ">
+              <div className="group">
+                <Cell stack>
+                  <Text bare multiline rows={2} value={urls} onChange={setUrls} placeholder={'https://example.com/service\n（1行に1つ）'} />
+                </Cell>
               </div>
-            ))}
-            {colors ? (
-              <div className="row center tight" style={{ marginTop: 6 }}>
-                <span className="faint" style={{ flex: 'none' }}>ブランドカラー:</span>
-                {[colors.primary, colors.dark, colors.accent, colors.light].map((c) => (
-                  <span key={c} title={c} style={{ flex: 'none', width: 18, height: 18, borderRadius: 4, background: c, border: '1px solid var(--border)' }} />
-                ))}
+            </Section>
+            <Section title="資料">
+              <DropZone
+                accept={DOC_ACCEPT}
+                icon={Upload}
+                title="ここにファイルをドロップ"
+                sub="PDF・PowerPoint・Word・Excel・テキスト・画像（最大10個）"
+                onFiles={(fs) => setDocs((o) => [...o, ...fs].slice(0, 10))}
+              />
+              {docs.length ? (
+                <div className="hstack wrap" style={{ marginTop: 10 }}>
+                  {docs.map((f, i) => (
+                    <span key={`${f.name}-${i}`} className="file-pill">
+                      <Ic n={FileText} size={13} mr={0} />
+                      <span className="ellipsis">{f.name}</span>
+                      <button className="icon-btn sm round" onClick={() => setDocs((o) => o.filter((_, j) => j !== i))} title="外す">
+                        <Ic n={X} size={12} mr={0} />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              ) : null}
+            </Section>
+            <Section title="補足（任意）" footer="資料に複数の商品がある時は「〇〇について」、ターゲットを絞りたい時は「自治体向けに」など">
+              <div className="group">
+                <Cell stack>
+                  <Text bare value={hint} onChange={setHint} placeholder="例: トークングラフマーケターについて、観光・地域振興の担当者向けに" />
+                </Cell>
+              </div>
+            </Section>
+            {reading ? (
+              <div className="group" style={{ marginTop: 20, padding: '14px 16px' }}>
+                <div className="hstack">
+                  <span className="spinner" />
+                  <span>{reading.message}</span>
+                </div>
+                <Progress value={reading.progress} />
               </div>
             ) : null}
-            {draft.cautions.length ? (
-              <>
-                <b style={{ display: 'block', marginTop: 8 }}>確認してほしい点</b>
-                {draft.cautions.map((c) => (
-                  <div key={c} className="faint">
-                    ・{c}
+          </>
+        ) : null}
+
+        {step === 1 ? (
+          <>
+            <div className="flow-head">
+              <h1>内容を確認しましょう</h1>
+              <p>AIは、ここに書かれていない数字や実績を作りません。</p>
+            </div>
+            {draft ? (
+              <div className="notice accent" style={{ marginBottom: 6, display: 'block' }}>
+                <div style={{ fontWeight: 600, marginBottom: 4 }}>読み込んだ資料から入力しました</div>
+                {draft.sources.map((x) => (
+                  <div key={x.label} className="caption">
+                    ・{x.label}
+                    {x.note ? `（${x.note}）` : x.chars ? `（${x.chars.toLocaleString()}文字）` : ''}
                   </div>
                 ))}
-              </>
+                {colors ? (
+                  <div className="hstack" style={{ marginTop: 8 }}>
+                    <span className="caption">ブランドカラー</span>
+                    {[colors.primary, colors.accent, colors.dark, colors.light].map((c) => (
+                      <span key={c} title={c} style={{ width: 16, height: 16, borderRadius: '50%', background: c, boxShadow: 'inset 0 0 0 .5px rgba(0,0,0,.2)' }} />
+                    ))}
+                  </div>
+                ) : null}
+                {draft.cautions.length ? (
+                  <>
+                    <div style={{ fontWeight: 600, margin: '10px 0 4px' }}>確認してほしい点</div>
+                    {draft.cautions.map((c) => (
+                      <div key={c} className="caption">
+                        ・{c}
+                      </div>
+                    ))}
+                  </>
+                ) : null}
+              </div>
             ) : null}
+            <Section title="商品">
+              <div className="group">
+                <Cell label="商品・サービス名" stack>
+                  <Text bare value={b.productName} onChange={set('productName')} placeholder="例: SUSHI TOP OCR" autoFocus={!b.productName} />
+                </Cell>
+                <Cell label="ひとことで言うと" stack>
+                  <Text bare multiline rows={2} value={b.oneLiner} onChange={set('oneLiner')} placeholder="何をする商品・サービスかを1〜2文で" />
+                </Cell>
+              </div>
+            </Section>
+            <Section title="だれに・なぜ">
+              <div className="group">
+                <Cell label="ターゲット" stack>
+                  <Text bare multiline rows={1} value={b.target} onChange={set('target')} placeholder="例: 販促キャンペーンの担当者" />
+                </Cell>
+                <Cell label="ターゲットの悩み・課題" stack>
+                  <Text bare multiline rows={2} value={b.problems} onChange={set('problems')} placeholder="例: キャンペーンの運用に手間がかかる" />
+                </Cell>
+              </div>
+            </Section>
+            <Section title="強み" footer="上から3つほどが「特徴」のシーンになります">
+              <div className="group">
+                <Cell label="特徴・メリット（1行に1つ）" stack>
+                  <Text bare multiline rows={4} value={b.features} onChange={set('features')} />
+                </Cell>
+                <Cell label="実績・数字・根拠" stack>
+                  <Text bare multiline rows={1} value={b.proof} onChange={set('proof')} placeholder="なし" />
+                </Cell>
+              </div>
+            </Section>
+          </>
+        ) : null}
+
+        {step === 2 ? (
+          <>
+            <div className="flow-head">
+              <h1>どんな動画にしますか？</h1>
+              <p>あとからエディターでいつでも変えられます。</p>
+            </div>
+            <Section title="画面の向き">
+              <div className="format-tiles">
+                {(
+                  [
+                    ['vertical', '縦', 'リール・ショート', 30, 52],
+                    ['square', '正方形', 'フィード', 44, 44],
+                    ['horizontal', '横', 'YouTube・Web', 60, 34],
+                  ] as const
+                ).map(([v, name, sub, w, h]) => (
+                  <button key={v} type="button" className={`format-tile ${format === v ? 'on' : ''}`} onClick={() => setFormat(v)}>
+                    <span style={{ height: 56, display: 'grid', placeItems: 'center' }}>
+                      <span className="shape" style={{ width: w, height: h }} />
+                    </span>
+                    <span className="ft-name">{name}</span>
+                    <span className="ft-sub">{sub}</span>
+                  </button>
+                ))}
+              </div>
+            </Section>
+            <Section title="長さ">
+              <Seg
+                block
+                size="lg"
+                value={String(b.durationSec)}
+                onChange={(v) => setB((o) => ({ ...o, durationSec: Number(v) }))}
+                options={[
+                  { value: '15', label: '15秒' },
+                  { value: '30', label: '30秒' },
+                  { value: '45', label: '45秒' },
+                  { value: '60', label: '60秒' },
+                ]}
+              />
+            </Section>
+            <Section title="実際の画面（任意）" footer="アプリや管理画面のスクリーンショットを入れると、その枚数ぶん「画面紹介」のシーンを作ります（最大4枚）">
+              {shots.length ? (
+                <div className="hstack wrap" style={{ gap: 14, marginBottom: 10 }}>
+                  {shots.map((x, i) => (
+                    <div key={x.staged} className="shot-thumb">
+                      <img src={x.url} alt={x.name} />
+                      <button className="icon-btn sm" onClick={() => setShots((o) => o.filter((_, j) => j !== i))} title="外す">
+                        <Ic n={X} size={12} mr={0} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+              {shots.length < 4 ? <DropZone accept="image/*" icon={ImagePlus} title="スクリーンショットを追加" sub="ドロップ、またはクリックして選ぶ" onFiles={addShots} /> : null}
+            </Section>
+            <Section title="締めくくり">
+              <div className="group">
+                <Cell label="見た人にしてほしいこと" stack>
+                  <Text bare value={b.cta} onChange={set('cta')} placeholder="例: 資料請求はこちら" />
+                </Cell>
+                <Cell label="連絡先・URL" stack>
+                  <Text bare value={b.contact} onChange={set('contact')} placeholder="例: example.com" />
+                </Cell>
+              </div>
+            </Section>
+            <Section title="雰囲気と注意">
+              <div className="group">
+                <Cell label="トーン" stack>
+                  <Text bare value={b.tone} onChange={set('tone')} />
+                </Cell>
+                <Cell label="注意事項・必ず入れる注記" stack>
+                  <Text bare multiline rows={1} value={b.notes} onChange={set('notes')} placeholder="なし" />
+                </Cell>
+              </div>
+            </Section>
+          </>
+        ) : null}
+
+        {err ? (
+          <div className="error" style={{ marginTop: 18 }}>
+            {err}
           </div>
         ) : null}
-      </div>
-      <div className="panel">
-        <h3>1. 商品について</h3>
-        <div className="row">
-          <Field label="商品・サービス名 *">
-            <Text value={b.productName} onChange={set('productName')} placeholder="例: SUSHI TOP OCR" />
-          </Field>
-          <Field label="尺">
-            <Seg
-              value={String(b.durationSec)}
-              onChange={(v) => setB((o) => ({ ...o, durationSec: Number(v) }))}
-              options={[
-                { value: '15', label: '15秒' },
-                { value: '30', label: '30秒' },
-                { value: '45', label: '45秒' },
-                { value: '60', label: '60秒' },
-              ]}
-            />
-          </Field>
-        </div>
-        <Field label="ひとことで言うと？ *" hint="何をする商品・サービスかを1〜2文で">
-          <Text value={b.oneLiner} onChange={set('oneLiner')} multiline />
-        </Field>
-        <div className="row">
-          <Field label="ターゲット">
-            <Text value={b.target} onChange={set('target')} multiline placeholder="例: 販促担当者" />
-          </Field>
-          <Field label="ターゲットの悩み・課題">
-            <Text value={b.problems} onChange={set('problems')} multiline />
-          </Field>
-        </div>
-        <Field label="特徴・メリット（1行に1つ）" hint="上から3つ程度が「特徴シーン」になります">
-          <Text value={b.features} onChange={set('features')} multiline rows={4} />
-        </Field>
-        <Field label="実績・数字・根拠" hint="AIは書かれていない数字を作りません">
-          <Text value={b.proof} onChange={set('proof')} />
-        </Field>
-      </div>
-      <div className="panel" style={{ marginTop: 16 }}>
-        <h3>2. 実際の画面（スクリーンショット）</h3>
-        <div className="muted" style={{ marginBottom: 10, lineHeight: 1.7 }}>
-          アプリ・管理画面・Webページなど、<b>実際の画面</b>の画像を入れると、その枚数ぶんだけ「画面紹介」シーンを作ります（疑似の画面は作りません）。
-          入れない場合は画面紹介シーンなしの構成になります。
-        </div>
-        <div className="row center" style={{ flexWrap: 'wrap', gap: 10 }}>
-          {shots.map((x, i) => (
-            <div key={x.staged} style={{ flex: 'none', position: 'relative' }}>
-              <img src={x.url} alt={x.name} style={{ height: 110, borderRadius: 8, border: '1px solid var(--border)' }} />
-              <button className="icon-btn" style={{ position: 'absolute', top: 2, right: 2, background: 'rgba(0,0,0,.6)' }} onClick={() => setShots((o) => o.filter((_, j) => j !== i))}>
-                <Ic n={X} mr={0} />
+      </main>
+
+      <footer className="flow-foot">
+        <div className="flow-foot-inner">
+          {step > 0 ? (
+            <button className="btn lg" onClick={() => setStep(step - 1)}>
+              戻る
+            </button>
+          ) : null}
+          <span className="spacer" />
+          {step === 0 ? (
+            <>
+              <button className="btn lg quiet" onClick={() => setStep(1)} disabled={Boolean(reading)}>
+                {hasSources ? 'スキップ' : '自分で入力する'}
               </button>
-            </div>
-          ))}
-          <FilePick
-            accept="image/*"
-            onFile={async (f) => {
-              try {
-                const r = await api.stage(f);
-                setShots((o) => [...o, { staged: r.staged, name: r.name, url: URL.createObjectURL(f) }].slice(0, 4));
-              } catch (e) {
-                setErr((e as Error).message);
-              }
-            }}
-          >
-            <Ic n={Plus} />スクリーンショットを追加（最大4枚）
-          </FilePick>
+              <button className="btn lg primary" disabled={Boolean(reading) || !hasSources} onClick={readSources}>
+                <Ic n={Sparkles} size={15} mr={0} />
+                読み込む
+              </button>
+            </>
+          ) : null}
+          {step === 1 ? (
+            <button className="btn lg primary" disabled={!canWrite} onClick={() => setStep(2)} title={canWrite ? '' : '商品名とひとことを入れてください'}>
+              次へ
+              <Ic n={ArrowRight} size={15} mr={0} />
+            </button>
+          ) : null}
+          {step === 2 ? (
+            <button className="btn lg primary" disabled={!canWrite || Boolean(job)} onClick={submit}>
+              <Ic n={Sparkles} size={15} mr={0} />
+              台本を作る
+            </button>
+          ) : null}
         </div>
-      </div>
-      <div className="panel" style={{ marginTop: 16 }}>
-        <h3>3. 見せ方</h3>
-        <div className="row">
-          <Field label="CTA（視聴者にしてほしい行動）">
-            <Text value={b.cta} onChange={set('cta')} placeholder="例: 資料請求はこちら" />
-          </Field>
-          <Field label="連絡先・URL">
-            <Text value={b.contact} onChange={set('contact')} placeholder="example.com" />
-          </Field>
-        </div>
-        <div className="row">
-          <Field label="トーン">
-            <Text value={b.tone} onChange={set('tone')} />
-          </Field>
-          <Field label="画面の向き">
-            <Seg
-              value={format}
-              onChange={setFormat}
-              options={[
-                { value: 'vertical', label: '縦 9:16' },
-                { value: 'square', label: '正方形' },
-                { value: 'horizontal', label: '横 16:9' },
-              ]}
-            />
-          </Field>
-        </div>
-        <Field label="注意事項・必ず入れる注記">
-          <Text value={b.notes} onChange={set('notes')} multiline />
-        </Field>
-      </div>
-      {err ? <div className="error" style={{ marginTop: 14 }}>{err}</div> : null}
-      <div style={{ marginTop: 18, display: 'flex', justifyContent: 'flex-end' }}>
-        <button className="btn primary lg" disabled={!b.productName || !b.oneLiner || Boolean(job)} onClick={submit}>
-          <Ic n={Sparkles} />台本を生成して編集へ
-        </button>
-      </div>
+      </footer>
+
       {job ? (
-        <div className="modal-bg">
-          <div className="modal">
-            <h3>AIが台本を作っています</h3>
-            <div className="muted">{job.message}</div>
-            <Progress value={job.progress} />
-            <div className="faint">構成・セリフ・図解・配色を考えています。通常30〜60秒ほどかかります。</div>
+        <Sheet>
+          <div className="hstack" style={{ gap: 12 }}>
+            <div className="spinner" />
+            <h3 style={{ margin: 0 }}>AIが台本を書いています</h3>
           </div>
-        </div>
+          <div className="sheet-text" style={{ margin: '10px 0 0' }}>
+            {job.message}
+          </div>
+          <Progress value={job.progress} />
+          <div className="caption">構成・セリフ・図解・配色を考えています。30〜60秒ほどかかります。</div>
+        </Sheet>
       ) : null}
     </div>
   );
 };
+

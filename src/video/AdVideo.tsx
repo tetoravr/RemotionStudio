@@ -40,8 +40,15 @@ const SceneRenderer: React.FC<{ st: SceneTiming; project: Project }> = ({ st, pr
       {s.type === 'cta' ? <CtaScene scene={s} /> : null}
     </SceneContext.Provider>
   );
-  // 直接調整中のシーンは、登場アニメーションが終わった状態で止めて、全要素を見せる（レイアウトを決めやすくする）
-  return edit?.enabled && edit.activeSceneId === s.id ? <Freeze frame={Math.max(0, st.duration - 1)}>{inner}</Freeze> : inner;
+  // 映像の要素を選んで調整している間は、そのシーンを登場アニメーションが終わった状態で止めて、全要素を見せる（レイアウトを決めやすくする）。
+  // 何も選んでいない一時停止中は、再生位置のコマをそのまま見せる。
+  // Freeze は常に置いて active だけ切り替える（ツリーの形が変わると中身が作り直されて、編集中の状態が消える）
+  const frozen = Boolean(edit?.enabled && edit.activeSceneId === s.id && edit.selectedId);
+  return (
+    <Freeze frame={Math.max(0, st.duration - 1)} active={frozen}>
+      {inner}
+    </Freeze>
+  );
 };
 
 /** slide / zoom: 直前シーンの最終フレームを止めて重ねる */

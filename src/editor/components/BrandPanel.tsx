@@ -1,8 +1,10 @@
+import { ImagePlus } from 'lucide-react';
 import React from 'react';
 import type { Project } from '../../video/schema';
 import { api } from '../api';
+import { Ic } from '../icons';
 import type { Update } from '../pages/Editor';
-import { Field, FilePick, Seg, Text } from './Fields';
+import { Cell, Disclosure, FilePick, Section, Text } from './Fields';
 
 const PRESETS: { name: string; colors: Project['brand']['colors'] }[] = [
   { name: 'ブルー', colors: { primary: '#1f5cff', dark: '#0d1b5e', accent: '#ffd93b', light: '#eaf0ff', text: '#15172b' } },
@@ -15,72 +17,100 @@ const PRESETS: { name: string; colors: Project['brand']['colors'] }[] = [
 
 const COLOR_LABELS: [keyof Project['brand']['colors'], string][] = [
   ['primary', 'メイン'],
-  ['dark', '濃色・フチ'],
   ['accent', '差し色'],
-  ['light', '淡い背景'],
+  ['dark', 'フチ'],
+  ['light', '背景'],
   ['text', '文字'],
 ];
 
+const FONTS: { value: Project['brand']['font']; name: string; family: string; weight: number }[] = [
+  { value: 'noto', name: 'ゴシック', family: '"Noto Sans JP", sans-serif', weight: 900 },
+  { value: 'rounded', name: '丸ゴシック', family: '"M PLUS Rounded 1c", sans-serif', weight: 800 },
+  { value: 'dela', name: '極太ポップ', family: '"Dela Gothic One", sans-serif', weight: 400 },
+];
+
+const same = (a: Project['brand']['colors'], b: Project['brand']['colors']) =>
+  (Object.keys(a) as (keyof typeof a)[]).every((k) => a[k].toLowerCase() === b[k].toLowerCase());
+
 export const BrandPanel: React.FC<{ project: Project; update: Update }> = ({ project, update }) => {
   const b = project.brand;
+  const preset = PRESETS.find((p) => same(p.colors, b.colors));
   return (
     <div>
-      <div className="section">
-        <div className="section-title">ブランド</div>
-        <Field label="商品・ブランド名">
-          <Text value={b.name} onChange={(v) => update((p) => void (p.brand.name = v))} />
-        </Field>
-        <Field label="タグライン" hint="[[ ]] で強調">
-          <Text value={b.tagline} onChange={(v) => update((p) => void (p.brand.tagline = v))} multiline />
-        </Field>
-        <Field label="ロゴ画像（任意）" hint="透過PNG推奨。設定するとロゴシーンとエンドカードで文字の代わりに表示されます">
-          <div className="row center">
-            {b.logo ? <img src={`/files/${project.id}/${b.logo}`} alt="" style={{ height: 44, flex: 'none', background: '#fff', borderRadius: 6, padding: 4 }} /> : <span className="faint">未設定（文字ロゴ）</span>}
-            <FilePick accept="image/*" onFile={async (f) => {
-              const { path } = await api.upload(project.id, f);
-              update((p) => void (p.brand.logo = path));
-            }}>
-              アップロード
+      <Section title="ブランド" footer="[[ ]] で囲んだ文字はブランドカラーになります">
+        <div className="group">
+          <Cell label="商品・ブランド名" stack>
+            <Text bare value={b.name} onChange={(v) => update((p) => void (p.brand.name = v))} />
+          </Cell>
+          <Cell label="タグライン" stack>
+            <Text bare multiline rows={1} value={b.tagline} onChange={(v) => update((p) => void (p.brand.tagline = v))} placeholder="なし" />
+          </Cell>
+          <Cell label="ロゴ画像" sub={b.logo ? 'ロゴとエンドカードで文字の代わりに表示' : '未設定のときは文字のロゴになります（透過PNG推奨）'}>
+            {b.logo ? <img src={`/files/${project.id}/${b.logo}`} alt="" className="thumb-img" style={{ height: 36, background: '#fff', padding: 3 }} /> : null}
+            <FilePick
+              accept="image/*"
+              onFile={async (f) => {
+                const { path } = await api.upload(project.id, f);
+                update((p) => void (p.brand.logo = path));
+              }}
+            >
+              <Ic n={ImagePlus} size={13} mr={0} />
+              {b.logo ? '変更…' : '選ぶ…'}
             </FilePick>
             {b.logo ? (
-              <button className="btn sm ghost" onClick={() => update((p) => void (p.brand.logo = undefined))}>
+              <button className="btn sm plain danger" onClick={() => update((p) => void (p.brand.logo = undefined))}>
                 外す
               </button>
             ) : null}
-          </div>
-        </Field>
-      </div>
-      <div className="section">
-        <div className="section-title">配色</div>
-        <div className="color-row" style={{ marginBottom: 12 }}>
-          {COLOR_LABELS.map(([k, l]) => (
-            <div className="c" key={k}>
-              <input type="color" value={b.colors[k]} onChange={(e) => update((p) => void (p.brand.colors[k] = e.target.value))} />
-              {l}
-            </div>
-          ))}
+          </Cell>
         </div>
-        <div className="chips">
-          {PRESETS.map((pr) => (
-            <button key={pr.name} className="chip" onClick={() => update((p) => void (p.brand.colors = { ...pr.colors }))}>
-              <span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: 3, background: pr.colors.primary, marginRight: 6 }} />
-              {pr.name}
+      </Section>
+
+      <Section title="カラー">
+        <div className="group">
+          <Cell>
+            <div className="swatches">
+              {PRESETS.map((pr) => (
+                <button
+                  key={pr.name}
+                  type="button"
+                  className={`swatch ${preset === pr ? 'on' : ''}`}
+                  title={pr.name}
+                  style={{ background: pr.colors.primary }}
+                  onClick={() => update((p) => void (p.brand.colors = { ...pr.colors }))}
+                >
+                  <span className="half" style={{ background: pr.colors.accent }} />
+                </button>
+              ))}
+            </div>
+            <span className="spacer" />
+            <span className="caption">{preset?.name ?? 'カスタム'}</span>
+          </Cell>
+          <Disclosure summary="色を細かく調整">
+            <div className="color-wells">
+              {COLOR_LABELS.map(([k, l]) => (
+                <label className="color-well" key={k}>
+                  <input type="color" value={b.colors[k]} onChange={(e) => update((p) => void (p.brand.colors[k] = e.target.value))} />
+                  {l}
+                </label>
+              ))}
+            </div>
+          </Disclosure>
+        </div>
+      </Section>
+
+      <Section title="フォント">
+        <div className="font-options">
+          {FONTS.map((f) => (
+            <button key={f.value} type="button" className={`font-option ${b.font === f.value ? 'on' : ''}`} onClick={() => update((p) => void (p.brand.font = f.value))}>
+              <span className="sample" style={{ fontFamily: f.family, fontWeight: f.weight }}>
+                Aaあ
+              </span>
+              <span className="fname">{f.name}</span>
             </button>
           ))}
         </div>
-      </div>
-      <div className="section">
-        <div className="section-title">フォント</div>
-        <Seg
-          value={b.font}
-          onChange={(v) => update((p) => void (p.brand.font = v))}
-          options={[
-            { value: 'noto', label: 'ゴシック（標準）' },
-            { value: 'rounded', label: '丸ゴシック' },
-            { value: 'dela', label: '極太ポップ' },
-          ]}
-        />
-      </div>
+      </Section>
     </div>
   );
 };
