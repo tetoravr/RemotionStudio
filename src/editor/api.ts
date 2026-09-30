@@ -17,9 +17,9 @@ export type Meta = {
 };
 
 /** プロジェクトの設定（auto 含む）から、実際に使う音声エンジンと ID を決める */
-export const ttsFor = (meta: Meta, setting: Project['audio']['ttsProvider']) => {
-  const provider: TtsProvider = setting === 'auto' ? meta.tts.default : setting;
-  return { provider, engine: meta.tts.engines[provider], ready: provider === 'irodori' ? meta.tts.irodori.online : meta.openai };
+export const ttsFor = (meta: Meta, _setting?: Project['audio']['ttsProvider']) => {
+  const provider: TtsProvider = 'irodori'; // 声は Irodori-TTS 固定（OpenAI TTS は不採用）
+  return { provider, engine: meta.tts.engines[provider], ready: meta.tts.irodori.online };
 };
 
 export type ProjectSummary = {

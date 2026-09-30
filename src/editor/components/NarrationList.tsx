@@ -1,9 +1,12 @@
+import { confirmDialog } from './Dialogs';
 import React, { useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { isAudioStale } from '../../video/narrationKey';
 import type { Project } from '../../video/schema';
 import { api, ttsFor } from '../api';
 import { MetaContext } from '../App';
 import type { RunJob } from '../pages/Editor';
+import { Circle, Play, RefreshCw, Square } from 'lucide-react';
+import { Ic } from '../icons';
 
 /** セリフ音声の再生（1つずつ／通し）。再生中のセリフIDを返す */
 export const useNarrationPlayer = (project: Project) => {
@@ -82,7 +85,15 @@ export const NarrationList: React.FC<{ project: Project; runJob: RunJob; onSelec
     <div>
       <div className="row center tight" style={{ marginBottom: 8, flexWrap: 'wrap' }}>
         <button className="btn sm primary" style={{ flex: 'none' }} disabled={!playable.length} onClick={() => (playing ? stop() : play(playable))}>
-          {playing ? '■ 停止' : '▶ 最初から通して聴く'}
+          {playing ? (
+            <>
+              <Ic n={Square} size={12} />停止
+            </>
+          ) : (
+            <>
+              <Ic n={Play} size={12} />最初から通して聴く
+            </>
+          )}
         </button>
         <button
           className="btn sm"
@@ -97,7 +108,10 @@ export const NarrationList: React.FC<{ project: Project; runJob: RunJob; onSelec
           className="btn sm ghost"
           style={{ flex: 'none' }}
           disabled={!tts.ready}
-          onClick={() => confirm('すべてのセリフの音声を作り直しますか？') && runJob('ナレーションを作り直しています', `/api/projects/${project.id}/narration`, { force: true })}
+          onClick={async () =>
+            (await confirmDialog({ title: 'すべてのセリフの音声を作り直しますか？', message: `${rows.length}セリフぶんの音声を作り直します。`, ok: '作り直す' })) &&
+            runJob('ナレーションを作り直しています', `/api/projects/${project.id}/narration`, { force: true })
+          }
         >
           すべて作り直す
         </button>
@@ -109,16 +123,19 @@ export const NarrationList: React.FC<{ project: Project; runJob: RunJob; onSelec
           style={{ marginBottom: 4, padding: '4px 6px', borderRadius: 6, background: playing === line.id ? 'rgba(124,92,255,0.18)' : undefined }}
         >
           <button className="icon-btn" style={{ flex: 'none' }} title={line.audio ? '再生' : '音声がありません'} disabled={!line.audio} onClick={() => (playing === line.id ? stop() : play([{ id: line.id, src: line.audio!.src }]))}>
-            {playing === line.id ? '■' : '▶'}
+            {playing === line.id ? <Ic n={Square} size={12} mr={0} /> : <Ic n={Play} size={12} mr={0} />}
           </button>
           <button className="icon-btn" style={{ flex: 'none' }} title="このセリフだけ作り直して、すぐ聴く" disabled={!tts.ready} onClick={() => redo(line.id)}>
-            ↻
+            <Ic n={RefreshCw} mr={0} />
           </button>
           <div style={{ flex: 1, minWidth: 0, cursor: onSelectScene ? 'pointer' : undefined }} onClick={() => onSelectScene?.(scene)} title="このシーンを開く">
             <div className="faint" style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
               シーン{scene + 1} ・ {name(line.speaker)}
               {line.audio ? ` ・ ${line.audio.durationSec.toFixed(1)}秒` : ''}
-              {stale ? <span className="audio-stale"> ● {line.audio ? '内容が変わりました' : '音声なし'}</span> : null}
+              {stale ? <span className="audio-stale">
+                {' '}
+                <Ic n={Circle} size={8} mr={3} />
+                {line.audio ? '内容が変わりました' : '音声なし'}</span> : null}
             </div>
             <div style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{line.text.replace(/\n/g, '')}</div>
           </div>

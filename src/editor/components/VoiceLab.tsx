@@ -1,8 +1,12 @@
+import { confirmDialog } from './Dialogs';
+import { Plus } from 'lucide-react';
 import React, { useContext, useState } from 'react';
 import type { CastMember } from '../../video/schema';
 import { api } from '../api';
 import { MetaContext, RefreshMetaContext } from '../App';
 import { Field, FilePick, Text } from './Fields';
+import { Check, FlaskConical } from 'lucide-react';
+import { Ic } from '../icons';
 
 type Candidate = { id: string; seed: number; url: string; durationSec: number };
 
@@ -74,7 +78,7 @@ export const VoiceLab: React.FC<{ member: CastMember; set: (fn: (m: CastMember) 
   };
 
   const remove = async () => {
-    if (!confirm('この参照音声を削除しますか？（この声を使っている他の動画も、声が変わります）')) return;
+    if (!(await confirmDialog({ title: 'この参照音声を削除しますか？', message: 'この声を使っている他の動画も、声が変わります。', ok: '削除する', danger: true }))) return;
     await api.deleteVoice(c.voice.refVoice!);
     await refreshMeta();
     set((m) => void (m.voice.refVoice = undefined));
@@ -84,7 +88,7 @@ export const VoiceLab: React.FC<{ member: CastMember; set: (fn: (m: CastMember) 
   return (
     <details className="sub" style={{ marginTop: 10 }} open={!fixed}>
       <summary className="label" style={{ cursor: 'pointer' }}>
-        🧪 参照音声をつくる（全編で同じ声にする）{fixed ? <span className="faint">　設定済み：{refLabel}</span> : null}
+        <Ic n={FlaskConical} />参照音声をつくる（全編で同じ声にする）{fixed ? <span className="faint">　設定済み：{refLabel}</span> : null}
       </summary>
       {!fixed ? (
         <div className="notice" style={{ margin: '8px 0', color: 'var(--danger)' }}>
@@ -102,7 +106,7 @@ export const VoiceLab: React.FC<{ member: CastMember; set: (fn: (m: CastMember) 
           候補を3つつくる
         </button>
         <button className="btn sm" style={{ flex: 'none' }} disabled={!irodori.online || pending > 0 || !text.trim()} onClick={() => generate(1)}>
-          ＋1つ追加
+          <Ic n={Plus} />1つ追加
         </button>
         <FilePick accept="audio/*" onFile={upload} className="btn sm nowrap">手持ちの音声を使う</FilePick>
         {cands.length ? (
@@ -122,7 +126,8 @@ export const VoiceLab: React.FC<{ member: CastMember; set: (fn: (m: CastMember) 
           </button>
         </div>
       ))}
-      {msg ? <div className="faint" style={{ marginTop: 6 }}>✓ {msg}</div> : null}
+      {msg ? <div className="faint" style={{ marginTop: 6 }}><Ic n={Check} />
+          {msg}</div> : null}
       {err ? <div className="faint" style={{ marginTop: 6, color: 'var(--danger)' }}>{err}</div> : null}
       {fixed ? (
         <button className="btn sm ghost danger" style={{ marginTop: 8 }} onClick={remove}>

@@ -17,6 +17,8 @@ import { DEFAULT_CAST } from '../src/video/templates';
 import sharp from 'sharp';
 import { attachScreenshots, generateStoryboard, type Brief, type ScreenshotRef } from '../server/ai/storyboard';
 import { generateCharacter } from '../server/characters';
+import { resolveMedia } from '../server/ai/media';
+import { loadUiLibrary } from '../server/ai/uiLibrary';
 import { config, hasOpenAI } from '../server/env';
 import { resolveProvider } from '../server/ai/tts';
 import { generateNarration } from '../server/narration';
@@ -69,7 +71,9 @@ const make = async () => {
   console.log(`▶ AIが台本を作成中…（${config.models.text}）`);
   const cast = DEFAULT_CAST.map((c) => structuredClone(c));
   const screenshotFiles = (flags.screenshots ?? '').split(',').filter(Boolean);
-  const { ai, scenes: rawScenes } = await generateStoryboard(brief, cast, format, screenshotFiles.length);
+  const uiLib = flags['no-ui-library'] === 'true' ? [] : await loadUiLibrary((d, t, f) => console.log(`   画面を解析中 ${d + 1}/${t} ${f}`));
+  if (uiLib.length) console.log(`   製品のUI画面 ${uiLib.length}枚（${config.uiDir}）`);
+  const { ai, scenes: rawScenes } = await generateStoryboard(brief, cast, format, screenshotFiles.map((f) => path.basename(f)), uiLib);
   const id = newProjectId(brief.productName);
   const shots: ScreenshotRef[] = [];
   for (const f of screenshotFiles) {
@@ -100,7 +104,20 @@ const make = async () => {
     brief,
   });
   console.log(`✔ 台本: ${project.scenes.length}シーン → projects/${project.id}/project.json`);
+  for (const pr of ai.plan?.problems ?? []) console.log(`   課題「${pr.voice}」→「${pr.featureEyebrow} ${pr.featureHeadline}」`);
   for (const s of project.scenes) console.log(`   - ${s.type.padEnd(8)} ${s.lines.map((l) => l.text.replace(/\n/g, '')).join(' / ')}`);
+
+  {
+    console.log(`\n▶ 製品画面の取り込み・図解の作成中…（${config.models.illustration}）`);
+    const r = await resolveMedia(project, (n, d) => saveAsset(project.id, n, d), { illustrations: flags['no-illustration'] !== 'true' });
+    project = await saveProject(project);
+    for (const s of project.scenes) {
+      if (s.type === 'showcase') console.log(`   画面紹介: ${s.screenshot}`);
+      if (s.type === 'feature') console.log(`   特徴「${s.headline}」: ${s.visual.kind}${'src' in s.visual ? ` ${s.visual.src}` : ''}`);
+      if (s.type === 'talk' && s.prop?.image) console.log(`   課題の図解: ${s.prop.image}`);
+    }
+    if (r.errors.length) console.log(`   ⚠ 失敗 ${r.errors.length}: ${r.errors[0]}`);
+  }
 
   if (flags.character) {
     console.log('\n▶ 主人公の画像を生成中…（約2分）');

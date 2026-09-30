@@ -110,7 +110,15 @@ export const Visual = z.discriminatedUnion('kind', [
     before: z.object({ icon: IconName, label: z.string() }),
     after: z.object({ icon: IconName, label: z.string() }),
   }),
-  z.object({ kind: z.literal('image'), src: z.string() }),
+  /** 画像（AIで作ったイラストなど）。prompt は作り直し用の指示文。src が空なら未生成 */
+  z.object({ kind: z.literal('image'), src: z.string(), prompt: z.string().optional() }),
+  /** 実際の画面（UIスクリーンショット）。スマホ枠／ブラウザ枠で見せる */
+  z.object({
+    kind: z.literal('screen'),
+    src: z.string(),
+    frame: z.enum(['phone', 'browser']).default('browser'),
+    size: z.object({ w: z.number(), h: z.number() }).optional(),
+  }),
 ]);
 export type Visual = z.infer<typeof Visual>;
 
@@ -128,6 +136,8 @@ export const ElementAdjust = z.object({
   hidden: z.boolean().optional(),
   /** 文字の揃え（文字を含む要素のみ） */
   align: z.enum(['left', 'center', 'right']).optional(),
+  /** 重なり順（直接調整で最後に触ったものほど大きい＝手前） */
+  z: z.number().int().optional(),
 });
 export type ElementAdjust = z.infer<typeof ElementAdjust>;
 
@@ -161,7 +171,13 @@ export const TalkScene = z.object({
   decor: z.enum(['none', 'question', 'sparkle', 'sweat', 'heart', 'exclaim']).default('none'),
   /** 話の小道具（落ちてくるアイコン） */
   prop: z
-    .object({ icon: IconName, badge: z.enum(['none', 'ng', 'ok']).default('none'), label: z.string().optional() })
+    .object({
+      icon: IconName,
+      badge: z.enum(['none', 'ng', 'ok']).default('none'),
+      label: z.string().optional(),
+      /** AIで作った（またはアップロードした）図解イラスト。あれば、アイコンのカードの代わりに大きく見せる */
+      image: z.string().optional(),
+    })
     .optional(),
 });
 export const FeatureScene = z.object({
@@ -200,6 +216,9 @@ export type Scene = z.infer<typeof Scene>;
 export type SceneType = Scene['type'];
 export type SceneOf<T extends SceneType> = Extract<Scene, { type: T }>;
 
+/** 話速の既定値。台本の文字数もこの速さを前提に決める */
+export const DEFAULT_VOICE_SPEED = 1.3;
+
 export const CastMember = z.object({
   id: z.string(),
   name: z.string(),
@@ -218,7 +237,7 @@ export const CastMember = z.object({
     voice: z.string().default('marin'),
     /** OpenAI TTS 用の話し方の指示 */
     instructions: z.string().default(''),
-    speed: z.number().min(0.5).max(2).default(1.0),
+    speed: z.number().min(0.5).max(2).default(DEFAULT_VOICE_SPEED),
     /** Irodori-TTS 用の声のデザイン（キャプション）。例: 「落ち着いた低めの女性の声。丁寧で穏やかな話し方」。空なら instructions を使う */
     caption: z.string().optional(),
     /** Irodori-TTS の乱数シード。同じ値なら同じ声になりやすい（キャラごとに固定） */

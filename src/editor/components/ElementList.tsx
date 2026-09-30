@@ -2,15 +2,18 @@ import React from 'react';
 import { elementExists, layoutLabel, sceneElementIds } from '../../video/edit/textEdit';
 import type { Project } from '../../video/schema';
 import type { Update } from '../pages/Editor';
+import { Puzzle } from 'lucide-react';
+import { Ic } from '../icons';
 
 /**
  * 直接調整した要素の一覧。プレビューに出ていない時間帯の要素の非表示・復元や、調整のリセットに使う。
- * 調整はプレビュー上（「✎ 直接調整」）で行う。
+ * 調整はプレビュー上（「直接調整」）で行う。
  */
 export const ElementList: React.FC<{ project: Project; index: number; update: Update; onSelect?: (id: string) => void }> = ({ project, index, update, onSelect }) => {
   const scene = project.scenes[index];
   const ids = sceneElementIds(scene).filter((id) => elementExists(scene, id));
-  const adjusted = Object.keys(scene.layout ?? {}).length;
+  // 重なり順（z）だけの記録は「調整」として数えない
+  const adjusted = Object.values(scene.layout ?? {}).filter((a) => a.hidden || a.align || a.dx || a.dy || (a.scale ?? 1) !== 1 || a.rotate).length;
   const set = (id: string, fn: (cur: NonNullable<typeof scene.layout>[string] | undefined) => NonNullable<typeof scene.layout>[string] | null) =>
     update((p) => {
       const sc = p.scenes[index];
@@ -24,8 +27,8 @@ export const ElementList: React.FC<{ project: Project; index: number; update: Up
   return (
     <details className="section" style={{ marginBottom: 10 }}>
       <summary className="section-title" style={{ cursor: 'pointer' }}>
-        🧩 要素の表示・調整{adjusted ? <span className="count">{adjusted}</span> : null}
-        <span className="faint">プレビュー上の「✎ 直接調整」で動かせます</span>
+        <Ic n={Puzzle} />要素の表示・調整{adjusted ? <span className="count">{adjusted}</span> : null}
+        <span className="faint">プレビュー上の「直接調整」で動かせます</span>
       </summary>
       {ids.map((id) => {
         const a = scene.layout?.[id];

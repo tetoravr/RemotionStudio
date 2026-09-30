@@ -5,6 +5,8 @@ import { MetaContext } from '../App';
 import type { RunJob, Update } from '../pages/Editor';
 import { Field, FilePick, Num, Slider, Toggle } from './Fields';
 import { NarrationList } from './NarrationList';
+import { CircleCheck, Music } from 'lucide-react';
+import { Ic } from '../icons';
 
 export const AudioPanel: React.FC<{ project: Project; update: Update; runJob: RunJob; onSelectScene?: (i: number) => void }> = ({ project, update, runJob, onSelectScene }) => {
   const a = project.audio;
@@ -31,7 +33,14 @@ export const AudioPanel: React.FC<{ project: Project; update: Update; runJob: Ru
               update((p) => void (p.audio.bgm = path));
             }}
           >
-            {bgmMode === 'custom' ? `🎵 ${a.bgm!.split('/').pop()}` : 'ファイルをアップロード'}
+            {bgmMode === 'custom' ? (
+              <>
+                <Ic n={Music} />
+                {a.bgm!.split('/').pop()}
+              </>
+            ) : (
+              'ファイルをアップロード'
+            )}
           </FilePick>
         </div>
         <Field label="BGM音量（セリフ中は自動で下がります）">
@@ -53,25 +62,15 @@ export const AudioPanel: React.FC<{ project: Project; update: Update; runJob: Ru
         <div className="section-title">ナレーション・字幕</div>
         <Toggle checked={a.narration} onChange={(v) => update((p) => void (p.audio.narration = v))} label="セリフを音声で読み上げる" />
         <div style={{ height: 10 }} />
-        <Field label="音声合成エンジン" hint="日本語の自然さは Irodori-TTS がおすすめ（ローカルで動かします。GPU推奨）。エンジンを変えると音声は作り直しになります">
+        <Field label="音声合成エンジン" hint="声は Irodori-TTS を使います（ローカルで動かします。GPU推奨）">
           <div className="chips">
-            {(
-              [
-                ['auto', `自動（現在: ${meta.tts.default === 'irodori' ? 'Irodori-TTS' : 'OpenAI TTS'}）`],
-                ['irodori', 'Irodori-TTS'],
-                ['openai', 'OpenAI TTS'],
-              ] as const
-            ).map(([v, label]) => (
-              <button key={v} className={`chip ${a.ttsProvider === v ? 'on' : ''}`} onClick={() => update((p) => void (p.audio.ttsProvider = v))}>
-                {label}
-              </button>
-            ))}
+            <button className="chip on">Irodori-TTS</button>
           </div>
         </Field>
         {tts.provider === 'irodori' ? (
           ir.online ? (
             <div className="notice" style={{ marginBottom: 10 }}>
-              ✅ Irodori-TTS に接続中（{ir.url} ／ {ir.checkpoint?.split('/').pop() ?? 'モデル不明'} ／ {ir.device ?? '?'}）
+              <Ic n={CircleCheck} />Irodori-TTS に接続中（{ir.url} ／ {ir.checkpoint?.split('/').pop() ?? 'モデル不明'} ／ {ir.device ?? '?'}）
               {ir.device === 'cpu' ? ' — GPUなしのため1セリフの生成に30〜60秒かかります' : ''}
             </div>
           ) : (

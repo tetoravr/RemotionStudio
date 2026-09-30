@@ -1,3 +1,5 @@
+import { confirmDialog, errorDialog } from './Dialogs';
+import { Plus } from 'lucide-react';
 import React, { useContext, useRef, useState } from 'react';
 import { LIBRARY_CHARACTERS, libraryCastMember } from '../../video/library';
 import { POSES, type CastMember, type Pose, type Project } from '../../video/schema';
@@ -7,6 +9,8 @@ import type { RunJob, Update } from '../pages/Editor';
 import { VoiceLab } from './VoiceLab';
 import { Field, FilePick, Num, Select, Slider, Text } from './Fields';
 import { POSE_LABELS } from './SceneInspector';
+import { Mic, Play, Sparkles, X } from 'lucide-react';
+import { Ic } from '../icons';
 
 const STYLE_LABELS: Record<string, string> = {
   anime: 'アニメ調（基準画像に合わせる）',
@@ -38,7 +42,7 @@ export const CastPanel: React.FC<{ project: Project; update: Update; runJob: Run
           })
         }
       >
-        ＋ キャラクターを追加
+        <Ic n={Plus} />キャラクターを追加
       </button>
     </div>
   );
@@ -99,8 +103,8 @@ const CastCard: React.FC<{ project: Project; member: CastMember; index: number; 
         <span className="faint">id: {c.id}</span>
         <div className="spacer" />
         {index > 1 ? (
-          <button className="icon-btn" onClick={() => confirm(`${c.name} を削除しますか？`) && update((p) => void p.cast.splice(index, 1))}>
-            ✕
+          <button className="icon-btn" onClick={async () => (await confirmDialog({ title: `${c.name} を削除しますか？`, ok: '削除する', danger: true })) && update((p) => void p.cast.splice(index, 1))}>
+            <Ic n={X} mr={0} />
           </button>
         ) : null}
       </div>
@@ -147,7 +151,7 @@ const CastCard: React.FC<{ project: Project; member: CastMember; index: number; 
 
       <div className="sub">
         <div className="label" style={{ marginBottom: 6 }}>
-          ✨ オリジナルキャラクターをAIで生成
+          <Ic n={Sparkles} />オリジナルキャラクターをAIで生成
         </div>
         <Field label="基準にする画像（任意）" hint="キャラのデザインシートやイラストを入れると、その見た目に合わせて全表情を作ります。無い場合は説明文から作ります">
           <div className="row center">
@@ -215,7 +219,7 @@ const CastCard: React.FC<{ project: Project; member: CastMember; index: number; 
 
       <div className="sub" style={{ marginTop: 10 }}>
         <div className="label" style={{ marginBottom: 6 }}>
-          🎙 声（{tts.provider === 'irodori' ? 'Irodori-TTS' : 'OpenAI TTS'}）
+          <Ic n={Mic} />声（{tts.provider === 'irodori' ? 'Irodori-TTS' : 'OpenAI TTS'}）
         </div>
         {tts.provider === 'irodori' ? (
           <>
@@ -240,7 +244,7 @@ const CastCard: React.FC<{ project: Project; member: CastMember; index: number; 
               </Field>
             </div>
             <Field label="話速" hint="1.0が標準。上げると、モデル自身が速く話します（音が不自然になりにくい）。セリフごとの感情は、シーンの「感情」「演技指示」で指定できます">
-              <Slider value={c.voice.speed} min={0.8} max={1.3} step={0.01} onChange={(v) => set((m) => void (m.voice.speed = v))} format={(v) => `×${v.toFixed(2)}`} />
+              <Slider value={c.voice.speed} min={0.8} max={1.6} step={0.01} onChange={(v) => set((m) => void (m.voice.speed = v))} format={(v) => `×${v.toFixed(2)}`} />
             </Field>
             <VoiceLab member={c} set={set} />
           </>
@@ -251,7 +255,7 @@ const CastCard: React.FC<{ project: Project; member: CastMember; index: number; 
                 <Select value={c.voice.voice} onChange={(v) => set((m) => void (m.voice.voice = v))} options={meta.voices.map((v) => ({ value: v.id, label: v.label }))} />
               </Field>
               <Field label="話速調整" hint="1.0が自然。1.1を超えると不自然になりやすい">
-                <Slider value={c.voice.speed} min={0.9} max={1.2} step={0.01} onChange={(v) => set((m) => void (m.voice.speed = v))} format={(v) => `×${v.toFixed(2)}`} />
+                <Slider value={c.voice.speed} min={0.9} max={1.5} step={0.01} onChange={(v) => set((m) => void (m.voice.speed = v))} format={(v) => `×${v.toFixed(2)}`} />
               </Field>
             </div>
             <Field label="話し方の指示" hint="年齢感・声のトーン・間の取り方など。セリフごとの感情は、シーンの「演技指示」で指定できます">
@@ -261,7 +265,11 @@ const CastCard: React.FC<{ project: Project; member: CastMember; index: number; 
         )}
         <div className="row center">
           <button className="btn sm" style={{ flex: 'none' }} disabled={!tts.ready || previewing} onClick={preview}>
-            {previewing ? '生成中…' : '▶ 試聴'}
+            {previewing ? '生成中…' : (
+              <>
+                <Ic n={Play} />試聴
+              </>
+            )}
           </button>
           {previewing && tts.provider === 'irodori' ? <span className="faint">GPUなしだと1文で30〜60秒かかります</span> : null}
           {previewErr ? <span className="faint" style={{ color: 'var(--danger)' }}>{previewErr}</span> : null}
@@ -271,11 +279,11 @@ const CastCard: React.FC<{ project: Project; member: CastMember; index: number; 
   );
 };
 
-const PoseThumb: React.FC<{ src?: string; onFile: (f: File) => void; dim?: boolean }> = ({ src, onFile, dim }) => {
+const PoseThumb: React.FC<{ src?: string; onFile: (f: File) => void | Promise<unknown>; dim?: boolean }> = ({ src, onFile, dim }) => {
   const ref = useRef<HTMLInputElement>(null);
   return (
     <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'flex-end', justifyContent: 'center', cursor: 'pointer', opacity: dim && !src ? 0.5 : 1 }} onClick={() => ref.current?.click()}>
-      {src ? <img src={src} alt="" style={{ maxHeight: '100%', maxWidth: '100%', objectFit: 'contain' }} /> : <div className="faint" style={{ margin: 'auto' }}>＋</div>}
+      {src ? <img src={src} alt="" style={{ maxHeight: '100%', maxWidth: '100%', objectFit: 'contain' }} /> : <div className="faint" style={{ margin: 'auto' }}><Ic n={Plus} size={16} mr={0} /></div>}
       <input
         ref={ref}
         type="file"
@@ -283,7 +291,7 @@ const PoseThumb: React.FC<{ src?: string; onFile: (f: File) => void; dim?: boole
         style={{ display: 'none' }}
         onChange={(e) => {
           const f = e.target.files?.[0];
-          if (f) onFile(f);
+          if (f) Promise.resolve(onFile(f)).catch((err) => errorDialog('画像を読み込めませんでした', err));
           e.target.value = '';
         }}
       />

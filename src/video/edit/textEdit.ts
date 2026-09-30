@@ -13,7 +13,7 @@ export const MAX_SCALE = 6;
 
 export const readAdjust = (scene: { layout?: Record<string, ElementAdjust> }, id: string): ElementAdjust => {
   const a = scene.layout?.[id];
-  return { dx: a?.dx ?? 0, dy: a?.dy ?? 0, scale: a?.scale ?? 1, rotate: a?.rotate ?? 0, px: a?.px, py: a?.py, hidden: a?.hidden, align: a?.align };
+  return { dx: a?.dx ?? 0, dy: a?.dy ?? 0, scale: a?.scale ?? 1, rotate: a?.rotate ?? 0, px: a?.px, py: a?.py, hidden: a?.hidden, align: a?.align, z: a?.z };
 };
 
 export const isIdentity = (a: ElementAdjust) => Math.abs(a.dx) < 0.5 && Math.abs(a.dy) < 0.5 && Math.abs(a.scale - 1) < 0.005 && Math.abs(a.rotate) < 0.05;
@@ -29,8 +29,9 @@ export const normalizeAdjust = (a: ElementAdjust): ElementAdjust | null => {
     py: a.py == null ? undefined : Math.round(a.py * 10) / 10,
     hidden: a.hidden || undefined,
     align: a.align,
+    z: a.z,
   };
-  if (!out.hidden && !out.align && isIdentity(out)) return null;
+  if (!out.hidden && !out.align && out.z == null && isIdentity(out)) return null;
   return out;
 };
 

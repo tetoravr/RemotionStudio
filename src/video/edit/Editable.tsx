@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useLayoutEffect, useRef, useState } from 'react';
+import { AlignCenter, AlignLeft, AlignRight, Minus, Plus, RotateCcw, RotateCw, Scaling, Trash2, type LucideIcon } from 'lucide-react';
 import { createPortal } from 'react-dom';
 import type { ElementAdjust } from '../schema';
 import { useScene } from '../SceneContext';
@@ -111,9 +112,22 @@ export const Editable: React.FC<{
   const pivot = box ? (mode === 'layer' ? { x: adj.px ?? box.x + box.w / 2, y: adj.py ?? box.y + box.h / 2 } : { x: box.x + box.w / 2, y: box.y + box.h / 2 }) : null;
   const origin = mode === 'layer' ? (adj.px != null && adj.py != null ? `${adj.px}px ${adj.py}px` : pivot ? `${pivot.x}px ${pivot.y}px` : '50% 50%') : '50% 50%';
 
-  if (!active && !changed && !adj.align) return <>{children}</>;
+  // 重なり順: 直接調整で触った要素は、元の順より手前（最後に触ったものが一番手前）
+  const zIndex = adj.z != null ? 1000 + adj.z : z;
+
+  if (!active && !changed && !adj.align && zIndex == null) return <>{children}</>;
+
+  /** このシーンで一番手前になる z（すでに一番手前ならそのまま） */
+  const frontZ = () => {
+    const others = Object.entries(scene.layout ?? {})
+      .filter(([k]) => k !== id)
+      .map(([, a]) => a.z ?? -1);
+    const top = Math.max(-1, ...others);
+    return adj.z != null && adj.z > top ? adj.z : top + 1;
+  };
 
   const put = (next: ElementAdjust, silent: boolean) => {
+    next = { ...next, z: frontZ() };
     const withPivot = mode === 'layer' && pivot ? { ...next, px: next.px ?? pivot.x, py: next.py ?? pivot.y } : next;
     edit?.commit(scene.id, id, normalizeAdjust(withPivot), silent);
   };
@@ -126,6 +140,8 @@ export const Editable: React.FC<{
     edit.pause();
     edit.select(id);
     edit.beginGesture();
+    // 触った時点で手前に出す（動かさずにクリックしただけでも）
+    if (adj.z == null || adj.z !== frontZ()) put(adj, true);
     const move = (ev: PointerEvent) => {
       // ボタンが離れているのに pointerup を取りこぼした場合は、ここで操作を終える
       if (ev.buttons === 0) up();
@@ -222,35 +238,36 @@ export const Editable: React.FC<{
         {draft === null ? (
           <>
             <div data-edit-ui title="ドラッグで回転（Shiftで15度ずつ）" onPointerDown={onRotateDown} style={{ ...handle(UI), ...at(rot), borderRadius: '50%', cursor: 'grab' }}>
-              ⟳
+              <RotateCw size={16} strokeWidth={2.4} />
             </div>
             <div data-edit-ui title="ドラッグで拡大縮小" onPointerDown={onScaleDown} style={{ ...handle(UI), ...at(sc), borderRadius: 6, cursor: 'nwse-resize' }}>
-              ⤡
+              <Scaling size={16} strokeWidth={2.4} />
             </div>
             <div data-edit-frame style={{ position: 'absolute', left: bar.x, top: bar.y, transform: 'translateX(-50%)', display: 'flex', gap: 6, pointerEvents: 'none' }}>
               <Chip ui={UI} title="縮小" onClick={() => nudge((a) => ({ ...a, scale: a.scale / 1.08 }))}>
-                −
+                <Minus size={16} strokeWidth={2.6} />
               </Chip>
               <Chip ui={UI} title="拡大" onClick={() => nudge((a) => ({ ...a, scale: a.scale * 1.08 }))}>
-                ＋
+                <Plus size={16} strokeWidth={2.6} />
               </Chip>
               <Chip ui={UI} title="位置・大きさ・回転を元に戻す" onClick={() => nudge((a) => ({ ...a, dx: 0, dy: 0, scale: 1, rotate: 0 }))}>
-                ↺
+                <RotateCcw size={15} strokeWidth={2.4} />
               </Chip>
               {text
                 ? (
                     [
-                      ['left', '⇤', '左揃え'],
-                      ['center', '≡', '中央揃え'],
-                      ['right', '⇥', '右揃え'],
+                      ['left', AlignLeft, '左揃え'],
+                      ['center', AlignCenter, '中央揃え'],
+                      ['right', AlignRight, '右揃え'],
                     ] as const
-                  ).map(([v, icon, label]) => (
+                  ).map(([v, Icon, label]) => (
                     <Chip key={v} ui={UI} active={adj.align === v} title={label} onClick={() => nudge((a) => ({ ...a, align: a.align === v ? undefined : v }))}>
-                      {icon}
+                      <Icon size={16} strokeWidth={2.4} />
                     </Chip>
                   ))
                 : null}
               <Chip ui={UI} danger title={`${layoutLabel(id, scene)}を削除（要素リストで元に戻せます）`} onClick={() => nudge((a) => ({ ...a, hidden: true }))}>
+                <Trash2 size={15} strokeWidth={2.4} />
                 削除
               </Chip>
             </div>
@@ -266,6 +283,10 @@ export const Editable: React.FC<{
     if (!el || !text || !edit) return;
     edit.pause();
     edit.select(id);
+    if (adj.z == null || adj.z !== frontZ()) {
+      edit.beginGesture();
+      put(adj, true);
+    }
     const prev = el.style.transform;
     el.style.transform = 'none';
     const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
@@ -341,7 +362,7 @@ export const Editable: React.FC<{
           : undefined
       }
       style={{
-        ...(mode === 'layer' ? { position: 'absolute', inset: 0, zIndex: z } : { position: 'relative', zIndex: z }),
+        ...(mode === 'layer' ? { position: 'absolute', inset: 0, zIndex } : { position: 'relative', zIndex }),
         transform,
         transformOrigin: origin,
         cursor: active ? 'move' : undefined,

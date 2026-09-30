@@ -77,7 +77,7 @@ export const ShowcaseScene: React.FC<{ scene: SceneOf<'showcase'> }> = ({ scene 
         </Editable>
       ) : null}
       {frame >= k.visualAt ? (
-        scene.screenshot ? (
+        scene.screenshot && !scene.screenshot.startsWith('ui:') ? (
           <Editable id="screen">
           <div
             style={{

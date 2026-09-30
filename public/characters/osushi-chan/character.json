@@ -6,7 +6,7 @@
   "voice": {
     "voice": "shimmer",
     "instructions": "小さくてかわいいマスコットキャラクターの声。幼く無邪気で、少し高め。ゆっくりめに、語尾をやさしく伸ばす。驚いた時は素直に大きく反応する。",
-    "speed": 1
+    "speed": 1.3
   },
   "images": {
     "default": "default.webp",

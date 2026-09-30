@@ -1,4 +1,4 @@
-import type { CastMember, Line } from './schema';
+import { DEFAULT_VOICE_SPEED, type CastMember, type Line } from './schema';
 
 /** 53bit の軽量ハッシュ（サーバー・エディター共通で使う） */
 const cyrb53 = (str: string, seed = 0) => {
@@ -17,7 +17,7 @@ const cyrb53 = (str: string, seed = 0) => {
 export const NARRATOR_VOICE: CastMember['voice'] = {
   voice: 'marin',
   instructions: '明るく聞き取りやすいCMナレーション。自然な話し方で、テンポよく、はっきりと。',
-  speed: 1.0,
+  speed: DEFAULT_VOICE_SPEED,
 };
 
 export const voiceFor = (speaker: string, cast: CastMember[]): CastMember['voice'] =>

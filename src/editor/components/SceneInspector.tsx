@@ -1,3 +1,4 @@
+import { Plus, Sparkles } from 'lucide-react';
 import { ElementList } from './ElementList';
 import React, { useContext, useRef } from 'react';
 import { ICON_LABELS } from '../../video/components/Icon';
@@ -15,6 +16,8 @@ import { MetaContext } from '../App';
 import type { RunJob, Update } from '../pages/Editor';
 import { regenerateLine } from './NarrationList';
 import { Field, FilePick, Num, Select, Text, Toggle } from './Fields';
+import { ChevronUp, Circle, Play, RefreshCw, X } from 'lucide-react';
+import { Ic } from '../icons';
 
 export const POSE_LABELS: Record<string, string> = {
   default: '通常', happy: '喜び', surprised: '驚き', sad: 'しょんぼり', think: '考え中', point: '指さし', wave: '手を振る', wink: 'ウインク',
@@ -28,6 +31,7 @@ const iconOptions = ICON_NAMES.map((n) => ({ value: n, label: `${ICON_LABELS[n]}
 const rid = () => Math.random().toString(36).slice(2, 8);
 
 export const SceneInspector: React.FC<{ project: Project; index: number; update: Update; timing?: SceneTiming; runJob?: RunJob; onSelectElement?: (id: string) => void }> = ({ project, index, update, timing, runJob, onSelectElement }) => {
+  const meta = useContext(MetaContext)!;
   const scene = project.scenes[index];
   const set = <K extends string>(key: K, value: unknown) =>
     update((p) => {
@@ -103,6 +107,37 @@ export const SceneInspector: React.FC<{ project: Project; index: number; update:
                 </Field>
               </div>
             ) : null}
+            {scene.prop ? (
+              <Field label="図解イラスト" hint="課題の状況をAIが図解にします（文字なし）。画像があるとアイコンのカードの代わりに大きく表示されます">
+                <div className="row center tight" style={{ flexWrap: 'wrap' }}>
+                  {scene.prop.image ? <img src={assetUrl(project.id, scene.prop.image)} alt="" style={{ height: 72, flex: 'none', borderRadius: 8, background: '#fff' }} /> : null}
+                  <button
+                    className="btn sm primary"
+                    style={{ flex: 'none' }}
+                    disabled={!meta.openai || !runJob}
+                    title={meta.openai ? '' : 'OPENAI_API_KEY が必要です'}
+                    onClick={() => runJob?.('課題の図解を作っています（約20秒）', `/api/projects/${project.id}/illustrations`, { sceneIds: [scene.id] })}
+                  >
+                    <Ic n={Sparkles} />
+                    {scene.prop.image ? 'AIで作り直す' : 'AIで図解を作る'}
+                  </button>
+                  <FilePick
+                    accept="image/*"
+                    onFile={async (f) => {
+                      const { path } = await api.upload(project.id, f);
+                      set('prop', { ...scene.prop, image: path });
+                    }}
+                  >
+                    画像を使う
+                  </FilePick>
+                  {scene.prop.image ? (
+                    <button className="btn sm ghost" style={{ flex: 'none' }} onClick={() => set('prop', { ...scene.prop, image: undefined })}>
+                      外す
+                    </button>
+                  ) : null}
+                </div>
+              </Field>
+            ) : null}
           </>
         ) : null}
         {scene.type === 'feature' ? (
@@ -116,7 +151,7 @@ export const SceneInspector: React.FC<{ project: Project; index: number; update:
             <Field label="注記（小さく）">
               <Text value={scene.footnote} onChange={(v) => set('footnote', v || undefined)} />
             </Field>
-            <VisualEditor projectId={project.id} visual={scene.visual} onChange={(v) => set('visual', v)} />
+            <VisualEditor projectId={project.id} sceneId={scene.id} visual={scene.visual} onChange={(v) => set('visual', v)} runJob={runJob} />
           </>
         ) : null}
         {scene.type === 'showcase' ? <ShowcaseFields project={project} scene={scene} set={set} /> : null}
@@ -203,13 +238,17 @@ const LinesEditor: React.FC<{ project: Project; index: number; update: Update; t
                 <>
                   {l.audio ? (
                     <button className={`icon-btn ${stale ? '' : 'audio-ok'}`} onClick={() => play(l.audio!.src)} title={stale ? '再生（文言や声を変えたので、いまの内容とは違います）' : '音声を再生'}>
-                      ▶ {l.audio.durationSec.toFixed(1)}s
+                      <Ic n={Play} size={12} />
+                      {l.audio.durationSec.toFixed(1)}s
                     </button>
                   ) : null}
-                  {stale ? <span className="audio-stale">● {l.audio ? '要作り直し' : '音声なし'}</span> : null}
+                  {stale ? <span className="audio-stale">
+                      <Ic n={Circle} size={8} mr={3} />
+                      {l.audio ? '要作り直し' : '音声なし'}</span> : null}
                   {runJob ? (
                     <button className="icon-btn" disabled={!tts.ready || !(l.text.trim() || l.speak?.trim())} onClick={() => redo(l.id)} title="このセリフだけ音声を作り直して、すぐ再生します">
-                      ↻ {l.audio ? '作り直す' : '作る'}
+                      <Ic n={RefreshCw} size={12} />
+                      {l.audio ? '作り直す' : '作る'}
                     </button>
                   ) : null}
                 </>
@@ -227,10 +266,10 @@ const LinesEditor: React.FC<{ project: Project; index: number; update: Update; t
                   })
                 }
               >
-                ▲
+                <Ic n={ChevronUp} mr={0} />
               </button>
               <button className="icon-btn" title="削除" onClick={() => update((p) => void p.scenes[index].lines.splice(li, 1))}>
-                ✕
+                <Ic n={X} mr={0} />
               </button>
             </div>
             <Text value={l.text} onChange={(v) => setLine(li, { text: v })} multiline />
@@ -283,7 +322,7 @@ const LinesEditor: React.FC<{ project: Project; index: number; update: Update; t
           )
         }
       >
-        ＋ セリフを追加
+        <Ic n={Plus} />セリフを追加
       </button>
     </div>
   );
@@ -304,7 +343,7 @@ const CharactersEditor: React.FC<{ project: Project; index: number; update: Upda
             <div className="spacer" />
             <Toggle checked={c.flip} onChange={(v) => setC(ci, { flip: v })} label={<span className="faint">左右反転</span>} />
             <button className="icon-btn" title="削除" onClick={() => update((p) => void p.scenes[index].characters.splice(ci, 1))}>
-              ✕
+              <Ic n={X} mr={0} />
             </button>
           </div>
           <div className="row tight">
@@ -375,7 +414,7 @@ const CharactersEditor: React.FC<{ project: Project; index: number; update: Upda
             )
           }
         >
-          ＋ キャラを追加
+          <Ic n={Plus} />キャラを追加
         </button>
       ) : (
         <div className="faint">「キャラ・声」タブでキャラクターを追加してください</div>
@@ -392,7 +431,8 @@ const VISUAL_KINDS: { value: Visual['kind']; label: string }[] = [
   { value: 'jump', label: '障壁を飛び越える' },
   { value: 'counter', label: '数字カウントアップ' },
   { value: 'compare', label: 'Before → After' },
-  { value: 'image', label: '画像' },
+  { value: 'image', label: 'イラスト・画像（AIで生成可）' },
+  { value: 'screen', label: '実際の画面（スクリーンショット）' },
 ];
 
 const defaultVisual = (kind: Visual['kind']): Visual => {
@@ -411,12 +451,15 @@ const defaultVisual = (kind: Visual['kind']): Visual => {
       return { kind, before: { icon: 'document', label: 'これまで' }, after: { icon: 'phone', label: 'これから' } };
     case 'image':
       return { kind, src: '' };
+    case 'screen':
+      return { kind, src: '', frame: 'browser' };
     default:
       return { kind: 'none' };
   }
 };
 
-const VisualEditor: React.FC<{ projectId: string; visual: Visual; onChange: (v: Visual) => void }> = ({ projectId, visual, onChange }) => {
+const VisualEditor: React.FC<{ projectId: string; sceneId: string; visual: Visual; onChange: (v: Visual) => void; runJob?: RunJob }> = ({ projectId, sceneId, visual, onChange, runJob }) => {
+  const meta = useContext(MetaContext)!;
   const v = visual as Visual & Record<string, unknown>;
   const patch = (p: Record<string, unknown>) => onChange({ ...visual, ...p } as Visual);
   const icon = (key: string) => (
@@ -470,13 +513,13 @@ const VisualEditor: React.FC<{ projectId: string; visual: Visual; onChange: (v: 
                 <Text value={it.label} onChange={(x) => patch({ items: visual.items.map((o, j) => (j === i ? { ...o, label: x } : o)) })} />
               </Field>
               <button className="icon-btn" style={{ flex: 'none', marginTop: 6 }} onClick={() => visual.items.length > 1 && patch({ items: visual.items.filter((_, j) => j !== i) })}>
-                ✕
+                <Ic n={X} mr={0} />
               </button>
             </div>
           ))}
           {visual.items.length < 3 ? (
             <button className="btn sm" onClick={() => patch({ items: [...visual.items, { icon: 'star', label: 'ポイント' }] })}>
-              ＋ アイコン
+              <Ic n={Plus} />アイコン
             </button>
           ) : null}
         </>
@@ -544,11 +587,41 @@ const VisualEditor: React.FC<{ projectId: string; visual: Visual; onChange: (v: 
         </>
       ) : null}
       {visual.kind === 'image' ? (
-        <div className="row center">
-          {visual.src ? <img src={`/files/${projectId}/${visual.src}`} alt="" style={{ height: 60, flex: 'none', objectFit: 'contain' }} /> : <span className="faint">未設定</span>}
-          <FilePick accept="image/*" onFile={async (f) => patch({ src: (await api.upload(projectId, f)).path })}>
-            画像をアップロード
+        <>
+          <Field label="イラストの内容（AIへの指示）" hint="解決した後の場面を具体的に。例: 受付でスタッフがタブレットで来場者の参加履歴を確認し、笑顔でうなずいている">
+            <Text value={visual.prompt} onChange={(x) => patch({ prompt: x || undefined })} multiline />
+          </Field>
+          <div className="row center tight" style={{ flexWrap: 'wrap' }}>
+            {visual.src ? <img src={`/files/${projectId}/${visual.src}`} alt="" style={{ height: 72, flex: 'none', objectFit: 'contain', borderRadius: 8, background: '#fff' }} /> : <span className="faint">未設定</span>}
+            <button
+              className="btn sm primary"
+              style={{ flex: 'none' }}
+              disabled={!meta.openai || !runJob || !visual.prompt?.trim()}
+              title={!visual.prompt?.trim() ? 'イラストの内容を入力してください' : ''}
+              onClick={() => runJob?.('イラストを描いています（約20秒）', `/api/projects/${projectId}/illustrations`, { sceneIds: [sceneId] })}
+            >
+              <Ic n={Sparkles} />
+              {visual.src ? 'AIで描き直す' : 'AIで描く'}
+            </button>
+            <FilePick accept="image/*" onFile={async (f) => patch({ src: (await api.upload(projectId, f)).path })}>
+              画像をアップロード
+            </FilePick>
+          </div>
+        </>
+      ) : null}
+      {visual.kind === 'screen' ? (
+        <div className="row center tight" style={{ flexWrap: 'wrap' }}>
+          {visual.src && !visual.src.startsWith('ui:') ? <img src={`/files/${projectId}/${visual.src}`} alt="" style={{ height: 72, flex: 'none', objectFit: 'contain' }} /> : <span className="faint">未設定</span>}
+          <FilePick
+            accept="image/*"
+            onFile={async (f) => {
+              const { path, size } = await api.upload(projectId, f);
+              patch({ src: path, size, frame: size && size.h > size.w * 1.2 ? 'phone' : 'browser' });
+            }}
+          >
+            スクリーンショットを選ぶ
           </FilePick>
+          <Select value={visual.frame} onChange={(x) => patch({ frame: x })} options={[{ value: 'browser', label: 'PC（ブラウザ枠）' }, { value: 'phone', label: 'スマホ枠' }]} />
         </div>
       ) : null}
     </div>

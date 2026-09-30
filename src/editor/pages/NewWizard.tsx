@@ -1,8 +1,11 @@
+import { Plus } from 'lucide-react';
 import React, { useState } from 'react';
 import type { Project } from '../../video/schema';
 import { api, waitJob, type Job } from '../api';
 import { go } from '../App';
 import { Field, FilePick, Progress, Seg, Text } from '../components/Fields';
+import { ArrowLeft, Sparkles, X } from 'lucide-react';
+import { Ic } from '../icons';
 
 type Brief = {
   productName: string;
@@ -71,7 +74,7 @@ export const NewWizard: React.FC = () => {
     <div className="wizard">
       <div className="row center" style={{ marginBottom: 18 }}>
         <button className="btn ghost" onClick={() => go('/')} style={{ flex: 'none' }}>
-          ← 戻る
+          <Ic n={ArrowLeft} />戻る
         </button>
         <h2 style={{ fontSize: 20 }}>AIで広告動画をつくる</h2>
         <button className="btn sm" style={{ flex: 'none' }} onClick={() => setB(EXAMPLE)}>
@@ -126,7 +129,7 @@ export const NewWizard: React.FC = () => {
             <div key={x.staged} style={{ flex: 'none', position: 'relative' }}>
               <img src={x.url} alt={x.name} style={{ height: 110, borderRadius: 8, border: '1px solid var(--border)' }} />
               <button className="icon-btn" style={{ position: 'absolute', top: 2, right: 2, background: 'rgba(0,0,0,.6)' }} onClick={() => setShots((o) => o.filter((_, j) => j !== i))}>
-                ✕
+                <Ic n={X} mr={0} />
               </button>
             </div>
           ))}
@@ -141,7 +144,7 @@ export const NewWizard: React.FC = () => {
               }
             }}
           >
-            ＋ スクリーンショットを追加（最大4枚）
+            <Ic n={Plus} />スクリーンショットを追加（最大4枚）
           </FilePick>
         </div>
       </div>
@@ -178,7 +181,7 @@ export const NewWizard: React.FC = () => {
       {err ? <div className="error" style={{ marginTop: 14 }}>{err}</div> : null}
       <div style={{ marginTop: 18, display: 'flex', justifyContent: 'flex-end' }}>
         <button className="btn primary lg" disabled={!b.productName || !b.oneLiner || Boolean(job)} onClick={submit}>
-          ✨ 台本を生成して編集へ
+          <Ic n={Sparkles} />台本を生成して編集へ
         </button>
       </div>
       {job ? (

@@ -11,11 +11,15 @@ export const config = {
   publicDir: path.resolve(ROOT, 'public'),
   /** 参照音声の控え。Irodori サーバー側の voices が消えても、ここから自動で再登録する */
   voicesDir: path.resolve(ROOT, process.env.VOICES_DIR || 'voices'),
+  /** 製品のUIスクリーンショット置き場。台本AIが中身を見て、合う画面を動画に使う */
+  uiDir: path.resolve(ROOT, process.env.UI_LIBRARY_DIR || 'SUSHI UI'),
   openaiKey: process.env.OPENAI_API_KEY || '',
   models: {
     text: process.env.OPENAI_TEXT_MODEL || 'gpt-5.5',
     tts: process.env.OPENAI_TTS_MODEL || 'gpt-4o-mini-tts',
     image: process.env.OPENAI_IMAGE_MODEL || 'gpt-image-2',
+    /** 図解イラスト（課題の説明など）。文字なしのフラットな図解に強いモデル */
+    illustration: process.env.OPENAI_ILLUSTRATION_MODEL || 'gpt-image-2.5-sunburst',
   },
   /** 音声合成。provider=auto は IRODORI_TTS_URL があれば Irodori-TTS、なければ OpenAI */
   tts: {

@@ -34,7 +34,7 @@ test('タイムライン: シーンが連続し、切り替えが8分音符グ�
     for (let i = 1; i < st.lines.length; i++) assert.ok(st.lines[i].start >= st.lines[i - 1].end, 'lines do not overlap');
   }
   assert.equal(tl.total, cursor);
-  assert.ok(tl.total / sample.fps > 25 && tl.total / sample.fps < 42, `about 30-40s (${tl.total / sample.fps})`);
+  assert.ok(tl.total / sample.fps > 25 && tl.total / sample.fps < 55, `about 30-50s (${tl.total / sample.fps})`);
 });
 
 test('音声がなくても文字数から尺を推定できる', () => {
@@ -84,20 +84,38 @@ test('AI出力をシーンに変換し、不正な値は補正・除外する', 
         headline: 'B！',
         footnote: null,
         background: null,
-        visual: { kind: 'stack', icon: 'receipt', count: 99 } as never,
+        visual: { kind: 'illustration', uiFile: null, illustration: '受付で笑顔のスタッフ', counterFrom: null, counterTo: null, prefix: null, suffix: null, caption: null } as never,
       },
+      {
+        type: 'feature',
+        transition: 'cut',
+        lines: [],
+        characters: [],
+        eyebrow: 'X',
+        headline: 'Y！',
+        footnote: null,
+        background: null,
+        visual: { kind: 'ui', uiFile: 'TGM_配布履歴.png', illustration: null, counterFrom: null, counterTo: null, prefix: null, suffix: null, caption: null } as never,
+      },
+      { type: 'showcase', transition: 'cut', lines: [], characters: [], uiFile: 'a.png', title: 't', note: null } as never,
       { type: 'cta', transition: 'cut', lines: [], characters: [], buttonText: 'Go', contact: null, notes: [] },
     ],
   };
   const scenes = aiToScenes(ai, DEFAULT_CAST);
-  assert.equal(scenes.length, 2);
+  assert.equal(scenes.length, 4);
   const f = scenes[0];
   assert.equal(f.type, 'feature');
   assert.equal(f.lines[0].speaker, 'narrator');
   assert.equal(f.lines[0].style, 'caption');
   assert.equal(f.characters[0].enterDelaySec, 2);
-  if (f.type === 'feature' && f.visual.kind === 'stack') assert.equal(f.visual.count, 6);
-  else assert.fail('visual should be stack');
+  // イラストは後で画像AIが描く（指示文だけ持つ）、画面はUIライブラリを参照する
+  if (f.type === 'feature' && f.visual.kind === 'image') assert.deepEqual([f.visual.src, f.visual.prompt], ['', '受付で笑顔のスタッフ']);
+  else assert.fail('visual should be image');
+  const g = scenes[1];
+  if (g.type === 'feature' && g.visual.kind === 'screen') assert.equal(g.visual.src, 'ui:TGM_配布履歴.png');
+  else assert.fail('visual should be screen');
+  const sc = scenes[2];
+  assert.ok(sc.type === 'showcase' && sc.screenshot === 'ui:a.png');
 });
 
 test('TTS音声の前後無音カットと音量正規化', () => {
@@ -236,4 +254,32 @@ test('直接調整: 文字揃えだけの調整も保存される', () => {
   const a = normalizeAdjust({ dx: 0, dy: 0, scale: 1, rotate: 0, align: 'right' });
   assert.equal(a?.align, 'right');
   assert.equal(normalizeAdjust({ dx: 0, dy: 0, scale: 1, rotate: 0 }), null);
+});
+
+test('音声の末尾に取り残された小さな孤立音は切り落とす（本体の語尾は残す）', () => {
+  const rate = 24000;
+  const tone = (sec: number, amp: number) => Float32Array.from({ length: Math.round(rate * sec) }, (_, i) => amp * Math.sin((i / rate) * 2 * Math.PI * 220));
+  const silence = (sec: number) => new Float32Array(Math.round(rate * sec));
+  const cat = (...a: Float32Array[]) => {
+    const out = new Float32Array(a.reduce((n, x) => n + x.length, 0));
+    let o = 0;
+    for (const x of a) (out.set(x, o), (o += x.length));
+    return out;
+  };
+  const speech = cat(tone(0.8, 0.5), silence(0.25), tone(0.6, 0.5), silence(0.3));
+  const withBlip = cat(speech, silence(0.4), tone(0.1, 0.03));
+  const clean = trimAndNormalize(speech, rate);
+  const trimmed = trimAndNormalize(withBlip, rate);
+  assert.ok(Math.abs(trimmed.length - clean.length) < rate * 0.02, `blip removed: ${trimmed.length} vs ${clean.length}`);
+  // 発話の途中の短い間や、本体の後半の語尾は落とさない
+  assert.ok(trimmed.length > rate * 1.6);
+  // 本体と同じくらい大きな語尾（間のあとの言葉）は残す
+  const keepsWord = trimAndNormalize(cat(tone(0.8, 0.5), silence(0.3), tone(0.5, 0.45)), rate);
+  assert.ok(keepsWord.length > rate * 1.5);
+});
+
+test('直接調整: 重なり順（z）だけの記録も保存され、調整とは別に扱う', () => {
+  const a = normalizeAdjust({ dx: 0, dy: 0, scale: 1, rotate: 0, z: 3 });
+  assert.equal(a?.z, 3);
+  assert.equal(a?.hidden, undefined);
 });

@@ -31,12 +31,8 @@ export type { TtsProvider };
 
 const IRODORI_FALLBACK_URL = 'http://127.0.0.1:8088';
 
-/** プロジェクト設定（auto / openai / irodori）から実際に使うエンジンを決める */
-export const resolveProvider = (setting: AudioSettings['ttsProvider'] = 'auto'): TtsProvider => {
-  const pick = setting !== 'auto' ? setting : config.tts.provider;
-  if (pick === 'openai' || pick === 'irodori') return pick;
-  return config.tts.irodoriUrl ? 'irodori' : 'openai';
-};
+/** 声は Irodori-TTS 固定（OpenAI TTS は不採用）。設定値は互換のため受け取るだけで無視する */
+export const resolveProvider = (_setting: AudioSettings['ttsProvider'] = 'auto'): TtsProvider => 'irodori';
 
 /** 音声の同一性キーに入れるエンジン ID */
 export const engineId = (provider: TtsProvider) => (provider === 'irodori' ? `irodori:${config.tts.irodoriModel}` : config.models.tts);
@@ -87,8 +83,10 @@ const TTS_RATE = 24000; // OpenAI の pcm 出力は 24kHz / 16bit / mono
  */
 export const trimAndNormalize = (input: Int16Array | Float32Array, rate = TTS_RATE) => {
   const f = input instanceof Int16Array ? Float32Array.from(input, (v) => v / 32768) : Float32Array.from(input);
-  const thr = 0.004;
   const win = Math.round(rate * 0.01);
+  let absPeak = 0;
+  for (const v of f) absPeak = Math.max(absPeak, Math.abs(v));
+  const thr = Math.max(0.004, absPeak * 0.02);
   const loud = (i: number) => {
     let m = 0;
     for (let k = i; k < Math.min(f.length, i + win); k++) m = Math.max(m, Math.abs(f[k]));
@@ -98,6 +96,7 @@ export const trimAndNormalize = (input: Int16Array | Float32Array, rate = TTS_RA
   while (start < f.length && !loud(start)) start += win;
   let end = f.length;
   while (end > start && !loud(Math.max(0, end - win))) end -= win;
+  end = dropTrailingNoise(f, rate, start, end);
   start = Math.max(0, start - Math.round(rate * 0.08));
   end = Math.min(f.length, end + Math.round(rate * 0.14));
   const out = f.slice(start, Math.max(start + 1, end));
@@ -115,11 +114,61 @@ export const trimAndNormalize = (input: Int16Array | Float32Array, rate = TTS_RA
   const rms = Math.sqrt(sum / Math.max(1, n));
   const gain = Math.min(Math.pow(10, -16 / 20) / Math.max(1e-4, rms), Math.pow(10, -1 / 20) / Math.max(1e-4, peak));
   const fade = Math.round(rate * 0.012);
+  const fadeOut = Math.round(rate * 0.06);
   for (let i = 0; i < out.length; i++) {
-    const e = Math.min(1, i / fade, (out.length - 1 - i) / fade);
+    const e = Math.min(1, i / fade, (out.length - 1 - i) / fadeOut);
     out[i] = Math.max(-1, Math.min(1, out[i] * gain * e));
   }
   return out;
+};
+
+/**
+ * 発話のあとに取り残された、小さくて短い孤立音（息・クリック・ノイズ）を落として、本当の終わりの位置を返す。
+ * TTS（特に感情の絵文字つき）は、発話が終わって少し間があいたあとに、小さな音が付くことがある。
+ * 判定: 直前の音との間が 0.15 秒以上あり、かつ 音量が本体の 30% 未満 か 0.12 秒未満。
+ */
+export const dropTrailingNoise = (f: Float32Array, rate: number, start: number, end: number) => {
+  const hop = Math.round(rate * 0.01);
+  const n = Math.floor((end - start) / hop);
+  if (n < 4) return end;
+  const rms: number[] = [];
+  for (let i = 0; i < n; i++) {
+    let sum = 0;
+    for (let k = start + i * hop; k < start + (i + 1) * hop; k++) sum += f[k] * f[k];
+    rms.push(Math.sqrt(sum / hop));
+  }
+  const max = Math.max(...rms);
+  const on = rms.map((v) => v > max * 0.05);
+  const gapMax = 15; // 0.15 秒までの切れ目は、同じ発話の中とみなす
+  // 音のかたまり（島）に分ける
+  const islands: { a: number; b: number; peak: number }[] = [];
+  let i = 0;
+  while (i < n) {
+    if (!on[i]) {
+      i++;
+      continue;
+    }
+    let last = i;
+    let peak = 0;
+    for (let j = i; j < n && j - last <= gapMax; j++) {
+      if (on[j]) {
+        last = j;
+        peak = Math.max(peak, rms[j]);
+      }
+    }
+    islands.push({ a: i, b: last + 1, peak });
+    i = last + 1;
+  }
+  while (islands.length > 1) {
+    const cur = islands[islands.length - 1];
+    const prev = islands[islands.length - 2];
+    const gap = cur.a - prev.b;
+    const weak = cur.peak < max * 0.3 || cur.b - cur.a < 12;
+    if (gap >= gapMax && weak) islands.pop();
+    else break;
+  }
+  const last = islands[islands.length - 1];
+  return last ? Math.min(end, start + last.b * hop) : end;
 };
 
 export const encodeWav = (samples: Float32Array, rate: number) => {
@@ -238,6 +287,31 @@ const synthOpenAI = async (text: string, voice: CastMember['voice'], delivery?: 
   return { samples: new Int16Array(even.buffer.slice(even.byteOffset, even.byteOffset + even.length)), rate: TTS_RATE };
 };
 
+/**
+ * 話速（×1.3 など）を Irodori の duration_scale に直す。
+ * Irodori は duration_scale を半分にしても発話は半分にならない（間や語尾で吸収される）ので、実測した対応表で補正する。
+ * 実測（参照音声・4文の平均）: 0.77→1.19倍 / 0.65→1.39倍 / 0.55→1.65倍 / 0.45→2.05倍
+ */
+const SPEED_TABLE: [number, number][] = [
+  [1, 1],
+  [1.19, 0.77],
+  [1.39, 0.65],
+  [1.65, 0.55],
+  [2.05, 0.45],
+];
+export const irodoriDurationScale = (speed: number) => {
+  if (speed <= 1) return Math.min(1.6, 1 / Math.max(0.5, speed));
+  const t = SPEED_TABLE;
+  for (let i = 1; i < t.length; i++) {
+    if (speed <= t[i][0]) {
+      const [s0, d0] = t[i - 1];
+      const [s1, d1] = t[i];
+      return d0 + ((speed - s0) / (s1 - s0)) * (d1 - d0);
+    }
+  }
+  return t[t.length - 1][1];
+};
+
 /** Irodori-TTS（OpenAI 互換サーバー）: 48kHz の WAV。声はキャプション（声のデザイン）＋固定シード、または参照音声で決める */
 const synthIrodori = async (text: string, voice: CastMember['voice'], opts: SynthOptions) => {
   const caption = irodoriCaption(voice, opts.delivery);
@@ -247,7 +321,7 @@ const synthIrodori = async (text: string, voice: CastMember['voice'], opts: Synt
   if (config.tts.irodoriSteps) irodori.num_steps = config.tts.irodoriSteps;
   // 話速はモデル自身に任せる（時間を伸縮するより自然）。1 より小さいほど速く話す
   const speed = voice.speed || 1;
-  if (Math.abs(speed - 1) >= 0.03) irodori.duration_scale = Math.min(1.5, Math.max(0.5, 1 / speed));
+  if (Math.abs(speed - 1) >= 0.03) irodori.duration_scale = irodoriDurationScale(speed);
   const refVoice = voice.refVoice || 'none';
   await ensureVoice(refVoice);
   const request = () =>

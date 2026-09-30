@@ -6,7 +6,7 @@
   "voice": {
     "voice": "marin",
     "instructions": "20代後半の日本人女性。明るく親しみやすい、自然な話し方。CMのナレーターのように張りすぎず、友達に説明するようなやわらかいトーンで。語尾は自然に下げ、句読点でしっかり間をとる。",
-    "speed": 1.05
+    "speed": 1.3
   },
   "images": {
     "default": "default.webp",

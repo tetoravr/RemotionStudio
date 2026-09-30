@@ -9,6 +9,9 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: { '/api': api, '/files': api },
+    watch: {
+      ignored: ['**/SUSHI UI/**', '**/projects/**', '**/voices/**', '**/node_modules/**'],
+    },
   },
   build: { outDir: 'dist', chunkSizeWarningLimit: 4000 },
 });

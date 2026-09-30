@@ -1,3 +1,4 @@
+import { ScreenFrame } from '../components/ScreenFrame';
 import React from 'react';
 import { Img, interpolate, useCurrentFrame, useVideoConfig, Easing } from 'remotion';
 import { bob, clamp, pop } from '../anim';
@@ -345,11 +346,50 @@ export const FeatureVisual: React.FC<{ visual: Visual; box: Box; startAt: number
     }
     case 'image': {
       const p = pop(frame, fps, startAt, 12, 150);
-      const src = resolveAsset(visual.src);
+      const src = visual.src ? resolveAsset(visual.src) : undefined;
       if (!src) return null;
+      // AIイラストは白背景なので、角丸の白いカードに載せて背景になじませる
+      const side = Math.min(box.w, box.h);
       return wrap(
-        <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', transform: `scale(${Math.max(0, p)}) translateY(${bob(frame, fps, 8 * u)}px)` }}>
-          <Img src={src} style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain', filter: 'drop-shadow(0 12px 20px rgba(0,0,0,0.2))' }} />
+        <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', transform: `scale(${Math.max(0, p)}) translateY(${bob(frame, fps, 6 * u)}px)` }}>
+          <div
+            style={{
+              width: side,
+              height: side,
+              boxSizing: 'border-box',
+              padding: side * 0.035,
+              background: '#fff',
+              borderRadius: side * 0.07,
+              border: `${Math.max(3, 6 * u)}px solid ${colors.dark}`,
+              boxShadow: `0 ${14 * u}px 0 rgba(0,0,0,0.14)`,
+            }}
+          >
+            <Img src={src} style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: side * 0.04, display: 'block' }} />
+          </div>
+        </div>,
+      );
+    }
+    case 'screen': {
+      const p = pop(frame, fps, startAt, 13, 150);
+      if (!visual.src || visual.src.startsWith('ui:')) return null;
+      const aspect = visual.size ? visual.size.h / visual.size.w : visual.frame === 'phone' ? 2 : 0.6;
+      // 枠ごと箱に収める（スマホは縦長の枠、ブラウザは画像の比率）
+      const w =
+        visual.frame === 'phone'
+          ? Math.min(box.w * 0.62, box.h / 2.04)
+          : Math.min(box.w, (box.h - box.w * 0.055) / Math.max(0.2, aspect) + 0);
+      return wrap(
+        <div
+          style={{
+            position: 'absolute',
+            left: (box.w - w) / 2,
+            top: Math.max(0, (box.h - (visual.frame === 'phone' ? w * 2.04 : w * aspect + w * 0.055)) / 2),
+            transform: `translateY(${(1 - Math.max(0, p)) * 120 * u}px) scale(${0.85 + 0.15 * Math.max(0, p)})`,
+            opacity: Math.min(1, Math.max(0, p) * 1.6),
+            filter: 'drop-shadow(0 16px 24px rgba(0,0,0,0.22))',
+          }}
+        >
+          <ScreenFrame kind={visual.frame} src={visual.src} size={visual.size} width={w} maxHeight={box.h} scrollFrom={startAt + 30} scrollDur={90} />
         </div>,
       );
     }

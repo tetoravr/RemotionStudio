@@ -8,14 +8,16 @@ import { blankProject, DEFAULT_CAST } from '../src/video/templates';
 import { LIBRARY_CHARACTERS } from '../src/video/library';
 import { STYLE_PRESETS } from './ai/images';
 import { attachScreenshots, generateStoryboard, reviseStoryboard, type Brief, type ScreenshotRef } from './ai/storyboard';
+import { resolveMedia } from './ai/media';
+import { loadUiLibrary } from './ai/uiLibrary';
 import { candidateFile, createCandidate, deleteVoice, registerVoice } from './ai/voices';
 import { engineId, irodoriStatus, OPENAI_VOICES, resolveProvider, synthesizeToFile } from './ai/tts';
 import { generateCharacter, type CharacterRequest } from './characters';
 import { config, hasOpenAI, ROOT } from './env';
-import { getJob, runningJobs, startJob } from './jobs';
+import { conflictFor, getJob, runningJobs, startJob } from './jobs';
 import { generateNarration, staleLines } from './narration';
 import {
-  deleteProject, duplicateProject, listProjects, loadProject, newProjectId, projectDir, saveAsset, saveProject, seedSamples,
+  deleteProject, duplicateProject, emptyTrash, listProjects, loadProject, newProjectId, projectDir, saveAsset, saveProject, seedSamples,
 } from './projects';
 import { renderProject } from './render';
 
@@ -80,7 +82,12 @@ app.put(
 app.delete(
   '/api/projects/:id',
   h(async (req, res) => {
-    await deleteProject(param(req, 'id'));
+    const id = param(req, 'id');
+    if (runningJobs(id).length) {
+      res.status(409).json({ error: 'このプロジェクトは処理中です（音声生成・書き出しなど）。終わってから削除してください' });
+      return;
+    }
+    await deleteProject(id);
     res.json({ ok: true });
   }),
 );
@@ -168,7 +175,9 @@ app.post(
     const job = startJob('storyboard', undefined, async (ctx) => {
       ctx.progress(0.1, 'AIが台本を書いています（30〜60秒）');
       const cast = DEFAULT_CAST.map((c) => structuredClone(c));
-      const { ai, scenes: rawScenes } = await generateStoryboard(brief, cast, format, screenshots.length);
+      // 製品のUI画面集（SUSHI UI フォルダなど）を読み込み、台本AIに選ばせる
+      const uiLib = await loadUiLibrary().catch(() => []);
+      const { ai, scenes: rawScenes } = await generateStoryboard(brief, cast, format, screenshots.map((s) => s.name || s.staged), uiLib);
       const id = newProjectId(brief.productName);
       const shots: ScreenshotRef[] = [];
       for (const sh of screenshots) shots.push(await adoptStaged(id, sh.staged));
@@ -194,6 +203,9 @@ app.post(
         scenes,
         brief,
       });
+      // 製品画面の取り込みと、図解・イラストの生成（失敗しても台本はそのまま使える）
+      await resolveMedia(project, (n, d) => saveAsset(project.id, n, d), { onProgress: (p, m) => ctx.progress(0.5 + p * 0.5, m) }).catch(() => null);
+      await saveProject(project);
       return { projectId: project.id };
     });
     res.json({ jobId: job.id });
@@ -208,6 +220,20 @@ const carryOverAudio = (before: Project, after: Project) => {
 };
 
 /** AI改稿後も、画面紹介シーンには元のスクリーンショットを順番に割り当て直す（足りなければそのシーンは外す） */
+/** 改稿後も、同じ内容のイラストは描き直さない（課題の図解はラベルが同じなら、特徴のイラストは指示文が同じなら使い回す） */
+const keepIllustrations = (before: Project, after: Project) => {
+  const props = new Map<string, string>();
+  const feats = new Map<string, string>();
+  for (const s of before.scenes) {
+    if (s.type === 'talk' && s.prop?.image) props.set(`${s.prop.label ?? ''}|${s.headline ?? ''}`, s.prop.image);
+    if (s.type === 'feature' && s.visual.kind === 'image' && s.visual.src && s.visual.prompt) feats.set(s.visual.prompt, s.visual.src);
+  }
+  for (const s of after.scenes) {
+    if (s.type === 'talk' && s.prop && !s.prop.image) s.prop.image = props.get(`${s.prop.label ?? ''}|${s.headline ?? ''}`);
+    if (s.type === 'feature' && s.visual.kind === 'image' && !s.visual.src && s.visual.prompt) s.visual.src = feats.get(s.visual.prompt) ?? '';
+  }
+};
+
 const keepScreenshots = (before: Project, scenes: Project['scenes']) => {
   const shots = before.scenes.flatMap((s) => (s.type === 'showcase' && s.screenshot ? [{ path: s.screenshot, size: s.screenshotSize }] : []));
   return attachScreenshots(scenes, shots);
@@ -222,13 +248,20 @@ app.post(
       res.status(400).json({ error: '修正指示を入力してください' });
       return;
     }
+    const busy = conflictFor(id, 'revise');
+    if (busy) {
+      res.status(409).json({ error: busy });
+      return;
+    }
     const job = startJob('revise', id, async (ctx) => {
       ctx.progress(0.1, 'AIが台本を修正しています');
       const project = await loadProject(id);
-      const { ai, scenes } = await reviseStoryboard(project, instruction);
+      const { ai, scenes } = await reviseStoryboard(project, instruction, await loadUiLibrary().catch(() => []));
       const next: Project = { ...project, title: ai.title || project.title, brand: { ...project.brand, tagline: ai.tagline || project.brand.tagline }, scenes };
       carryOverAudio(project, next);
       next.scenes = keepScreenshots(project, next.scenes);
+      keepIllustrations(project, next);
+      await resolveMedia(next, (n, d) => saveAsset(id, n, d), { onProgress: (p, m) => ctx.progress(0.5 + p * 0.5, m) }).catch(() => null);
       await saveProject(next);
       return { projectId: id };
     });
@@ -243,6 +276,11 @@ app.post(
     // lineIds を指定すると、そのセリフだけを（変更の有無にかかわらず）作り直す
     const only = Array.isArray(req.body?.lineIds) ? (req.body.lineIds as unknown[]).map(String) : undefined;
     const force = Boolean(req.body?.force) || Boolean(only);
+    const busy = conflictFor(id, 'narration');
+    if (busy) {
+      res.status(409).json({ error: busy });
+      return;
+    }
     const job = startJob('narration', id, async (ctx) => {
       const project = await loadProject(id);
       const todo = staleLines(project, force, only).length;
@@ -270,6 +308,11 @@ app.post(
     const body = req.body as Omit<CharacterRequest, 'castId'>;
     if (!body?.description?.trim()) {
       res.status(400).json({ error: 'キャラクターの説明を入力してください' });
+      return;
+    }
+    const busy = conflictFor(id, 'character');
+    if (busy) {
+      res.status(409).json({ error: busy });
       return;
     }
     const job = startJob('character', id, async (ctx) => {
@@ -317,6 +360,35 @@ app.post(
     } finally {
       fs.rmSync(tmp, { force: true });
     }
+  }),
+);
+
+/** 課題シーンの図解を作る（sceneIds 指定でそのシーンだけ作り直す） */
+app.post(
+  '/api/projects/:id/illustrations',
+  h(async (req, res) => {
+    const id = param(req, 'id');
+    const sceneIds = Array.isArray(req.body?.sceneIds) ? (req.body.sceneIds as unknown[]).map(String) : undefined;
+    const busy = conflictFor(id, 'illustration');
+    if (busy) {
+      res.status(409).json({ error: busy });
+      return;
+    }
+    const job = startJob('illustration', id, async (ctx) => {
+      const project = await loadProject(id);
+      const r = await resolveMedia(project, (n, d) => saveAsset(id, n, d), { sceneIds, onProgress: (p, m) => ctx.progress(p, m) });
+      if (r.errors.length) throw new Error(`図解の生成に失敗しました: ${r.errors[0]}`);
+      // 生成中の編集を壊さないよう、最新を読み直して画像だけ反映
+      const latest = await loadProject(id);
+      for (const s of latest.scenes) {
+        const made = project.scenes.find((x) => x.id === s.id);
+        if (s.type === 'talk' && s.prop && made?.type === 'talk' && made.prop?.image) s.prop.image = made.prop.image;
+        if (s.type === 'feature' && made?.type === 'feature' && made.visual.kind === 'image' && s.visual.kind === 'image') s.visual.src = made.visual.src;
+      }
+      await saveProject(latest);
+      return r;
+    });
+    res.json({ jobId: job.id });
   }),
 );
 
@@ -398,7 +470,8 @@ app.post(
       return;
     }
     const check = await loadProject(id);
-    const missing = check.scenes.map((sc, i) => (sc.type === 'showcase' && !sc.screenshot ? i + 1 : 0)).filter(Boolean);
+    // ui: は取り込み前の参照（取り込みに失敗した）なので、未設定と同じ扱い
+    const missing = check.scenes.map((sc, i) => (sc.type === 'showcase' && (!sc.screenshot || sc.screenshot.startsWith('ui:')) ? i + 1 : 0)).filter(Boolean);
     if (missing.length) {
       res.status(400).json({ error: `シーン${missing.join('・')}（画面紹介）に実際のスクリーンショットが設定されていません。画像を設定するか、シーンを削除してください。` });
       return;
@@ -435,6 +508,7 @@ app.use((err: Error & { status?: number }, _req: Request, res: Response, _next: 
 });
 
 await seedSamples();
+await emptyTrash();
 app.listen(config.port, config.host, async () => {
   console.log(`\n  Ad Studio server: http://localhost:${config.port}`);
   console.log(`  OpenAI: ${hasOpenAI() ? `有効 (${config.models.text} / ${config.models.tts} / ${config.models.image})` : '未設定（.env に OPENAI_API_KEY を設定すると AI 機能が使えます）'}`);

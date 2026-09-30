@@ -8,6 +8,7 @@ import { StrokeText } from '../components/StrokeText';
 import { fitFontSize } from '../components/RichText';
 import { useScene } from '../SceneContext';
 import { useTheme } from '../theme';
+import { speechOnset } from '../timeline';
 
 /** シーンのキャラクター（小さい順に奥から描く） */
 export const SceneCharacters: React.FC = () => {
@@ -40,7 +41,7 @@ export const SceneBubbles: React.FC<{ fallbackY?: number; minTipY?: number }> = 
   const { layout, project } = useTheme();
   const { u, width: W, height: H } = layout;
   return (
-    <AbsoluteFill style={{ zIndex: 20 }}>
+    <AbsoluteFill>
       {timing.lines.map((lt) => {
         const style = lt.line.style;
         if (style !== 'bubble' && style !== 'bubble-accent') return null;
@@ -54,12 +55,12 @@ export const SceneBubbles: React.FC<{ fallbackY?: number; minTipY?: number }> = 
           tipY = Math.max(minTipY ?? 0, g.headY + 10 * u);
         }
         return (
-          <Editable key={lt.line.id} id={`line:${lt.line.id}`} text={{ target: { type: 'line', lineId: lt.line.id }, value: lt.line.text }}>
+          <Editable key={lt.line.id} id={`line:${lt.line.id}`} z={20} text={{ target: { type: 'line', lineId: lt.line.id }, value: lt.line.text }}>
           <SpeechBubble
             text={lt.line.text}
             tipX={tipX}
             tipY={tipY}
-            appearAt={Math.max(0, lt.start - 2)}
+            appearAt={Math.max(0, lt.start + speechOnset(project.fps) - 1)}
             hideAt={!showAll && lt.visibleUntil < timing.duration ? lt.visibleUntil : undefined}
             variant={style === 'bubble-accent' ? 'accent' : 'white'}
             fontSize={layout.portrait ? 54 * u : 50 * u}
