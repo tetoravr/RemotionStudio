@@ -16,6 +16,12 @@ export type SceneTiming = {
   start: number;
   duration: number;
   lines: LineTiming[];
+  /** 自動で決めた場合の長さ（秒・ビート吸着前） */
+  autoSec: number;
+  /** これより短くはできない長さ（秒）。最後のセリフを言い終わるまで */
+  minSec: number;
+  /** 長さを手で決めているか（scene.lengthSec） */
+  fixed: boolean;
 };
 
 export type Timeline = {
@@ -161,14 +167,20 @@ export const computeTimeline = (project: Project): Timeline => {
     const speechEnd = t - LINE_GAP_SEC;
     // 最後のセリフを読み終えて、次のワイプの帯がかかる前に余韻を残す
     const needEnd = Math.max(speechEnd + TAIL_SEC, readingEnd(scene, raw, lead, project.brand.name)) + coverOut / fps;
-    let durSec = Math.max(needEnd, scene.minDurationSec ?? MIN_DURATION[scene.type]);
-    if (isLast) durSec += END_HOLD_SEC;
+    let autoSec = Math.max(needEnd, scene.minDurationSec ?? MIN_DURATION[scene.type]);
+    if (isLast) autoSec += END_HOLD_SEC;
+    // 手で長さを決めた時も、最後のセリフの途中では切らない（次のワイプの帯がかかる分も残す）
+    const hasSpeech = raw.length > 0;
+    const minSec = Math.max(0.8, (hasSpeech ? speechEnd + 0.15 : 0) + coverOut / fps);
+    const fixed = scene.lengthSec != null;
+    const durSec = fixed ? Math.max(minSec, scene.lengthSec!) : autoSec;
+    const mustEnd = fixed ? minSec : needEnd;
 
     // シーン境界を最寄りのビートに吸着（BGMとカットを同期させる）。セリフは切らない
     let endSec = cursorSec + durSec;
     if (beatSec > 0) {
       let snapped = Math.round(endSec / beatSec) * beatSec;
-      while (snapped < cursorSec + needEnd - 0.05) snapped += beatSec;
+      while (snapped < cursorSec + mustEnd - 0.05) snapped += beatSec;
       endSec = snapped;
     }
     if (endSec - cursorSec < 0.8) endSec = cursorSec + Math.max(0.8, durSec);
@@ -187,7 +199,7 @@ export const computeTimeline = (project: Project): Timeline => {
       lt.visibleUntil = next ? next.start + 6 : duration;
     });
 
-    scenes.push({ scene, index, start: cursorFrame, duration, lines });
+    scenes.push({ scene, index, start: cursorFrame, duration, lines, autoSec, minSec, fixed });
     cursorFrame = endFrame;
     cursorSec = endSec;
   });

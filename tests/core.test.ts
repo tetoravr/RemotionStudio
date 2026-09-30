@@ -37,6 +37,41 @@ test('タイムライン: シーンが連続し、切り替えが8分音符グ�
   assert.ok(tl.total / sample.fps > 25 && tl.total / sample.fps < 55, `about 30-50s (${tl.total / sample.fps})`);
 });
 
+test('シーンの長さ: 手で伸ばす・縮められる。セリフの途中では切らず、カットは拍に乗る', () => {
+  const eighth = (60 / sample.audio.bpm / 2) * sample.fps;
+  const base = computeTimeline(sample);
+  const i = base.scenes.findIndex((st) => st.lines.length > 0 && st.index < sample.scenes.length - 1);
+  const auto = base.scenes[i];
+  assert.equal(auto.fixed, false);
+
+  const withLen = (sec: number) => {
+    const p = structuredClone(sample);
+    p.scenes[i].lengthSec = sec;
+    return computeTimeline(Project.parse(p));
+  };
+  const cutsOnGrid = (tl: ReturnType<typeof computeTimeline>) =>
+    tl.scenes.every((st) => Math.round((st.start + st.duration) / eighth) * eighth === st.start + st.duration);
+
+  // 伸ばす: 指定した長さ（拍に吸着）になり、後ろのシーンは後ろへずれる
+  const longer = withLen(auto.duration / sample.fps + 2);
+  assert.ok(longer.scenes[i].fixed);
+  assert.ok(Math.abs(longer.scenes[i].duration - (auto.duration + 2 * sample.fps)) <= eighth / 2 + 1);
+  assert.equal(longer.scenes[i + 1].start, longer.scenes[i].start + longer.scenes[i].duration);
+  assert.ok(cutsOnGrid(longer));
+
+  // 縮める: 自動より短くできるが、最後のセリフを言い終わるまでは残す
+  const shorter = withLen(auto.minSec + 0.3);
+  assert.ok(shorter.scenes[i].duration < auto.duration, 'shorter than auto');
+  assert.ok(cutsOnGrid(shorter));
+  const lastEnd = Math.max(...shorter.scenes[i].lines.map((l) => l.end));
+  assert.ok(lastEnd <= shorter.scenes[i].duration, 'speech not cut');
+
+  // 極端に短くしても、セリフの終わり（最短の長さ）より短くはならない
+  const tiny = withLen(0.3);
+  assert.ok(tiny.scenes[i].duration / sample.fps >= auto.minSec - 0.05);
+  assert.ok(Math.max(...tiny.scenes[i].lines.map((l) => l.end)) <= tiny.scenes[i].duration);
+});
+
 test('音声がなくても文字数から尺を推定できる', () => {
   const p = Project.parse(blankProject({ id: 'x', title: 't', brandName: 'テスト' }));
   const tl = computeTimeline(p);

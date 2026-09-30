@@ -1,22 +1,19 @@
-import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, Ellipsis, FlipHorizontal2, ImagePlus, Play, Plus, RefreshCw, Sparkles, Trash2, TriangleAlert, X } from 'lucide-react';
-import React, { useContext, useRef, useState } from 'react';
+import { Ellipsis, FlipHorizontal2, ImagePlus, Minus, Plus, Sparkles, Trash2, TriangleAlert, X } from 'lucide-react';
+import React, { useContext } from 'react';
 import { ICON_LABELS } from '../../video/components/Icon';
-import { normalizeAdjust, readAdjust, sceneLayout, setSceneLayout } from '../../video/edit/textEdit';
-import { isAudioStale } from '../../video/narrationKey';
 import {
   BACKGROUNDS, ICON_NAMES, TRANSITIONS,
-  type CharacterPlacement, type IconName, type Line, type Project, type Scene, type Visual,
+  type CharacterPlacement, type IconName, type Project, type Scene, type Visual,
 } from '../../video/schema';
 import type { SceneTiming } from '../../video/timeline';
-import { api, ttsFor } from '../api';
+import { api } from '../api';
 import { MetaContext } from '../App';
 import { Ic } from '../icons';
 import type { RunJob, Update } from '../pages/Editor';
 import { SCENE_META } from '../sceneMeta';
 import { ElementList } from './ElementList';
-import { Cell, Disclosure, Field, FilePick, MenuItem, Num, Popover, Section, Seg, Select, Text, Toggle } from './Fields';
-import { regenerateLine } from './NarrationList';
-import { assetUrl, Avatar, EmojiPicker, POSE_LABELS, PosePicker, SpeakerPicker } from './pickers';
+import { Cell, Disclosure, FilePick, MenuItem, Num, Popover, Section, Seg, Select, Text, Toggle } from './Fields';
+import { assetUrl, Avatar, POSE_LABELS, PosePicker } from './pickers';
 
 export { POSE_LABELS };
 
@@ -26,8 +23,6 @@ const BG_LABELS: Record<string, string> = {
   'stripes-dark': 'ストライプ（濃）', dots: 'ドット', gradient: 'グラデーション', plain: '無地',
 };
 const iconOptions = ICON_NAMES.map((n) => ({ value: n, label: ICON_LABELS[n] }));
-const rid = () => Math.random().toString(36).slice(2, 8);
-const STYLE_LABELS: Record<Line['style'], string> = { bubble: '吹き出し', 'bubble-accent': '強調', caption: '字幕', none: '声のみ' };
 const HIGHLIGHT_HINT = '[[ ]] で囲んだ文字はブランドカラーになります';
 
 export const SceneInspector: React.FC<{ project: Project; index: number; update: Update; timing?: SceneTiming; runJob?: RunJob; onSelectElement?: (id: string) => void }> = ({
@@ -60,6 +55,8 @@ export const SceneInspector: React.FC<{ project: Project; index: number; update:
           </div>
         </div>
       </div>
+
+      {timing ? <LengthControl project={project} index={index} timing={timing} update={update} /> : null}
 
       {scene.type === 'logo' ? (
         <Section title="テキスト" footer={`${HIGHLIGHT_HINT}。ロゴ画像は「デザイン」で設定できます`}>
@@ -136,7 +133,6 @@ export const SceneInspector: React.FC<{ project: Project; index: number; update:
       ) : null}
       {scene.type === 'talk' ? <PropEditor project={project} scene={scene} set={set} runJob={runJob} /> : null}
 
-      <LinesEditor project={project} index={index} update={update} runJob={runJob} />
       <CharactersEditor project={project} index={index} update={update} />
 
       <Section title="そのほか">
@@ -153,13 +149,6 @@ export const SceneInspector: React.FC<{ project: Project; index: number; update:
                 onChange={(v) => set('background', v || undefined)}
                 options={[{ value: '', label: '自動' }, ...BACKGROUNDS.map((b) => ({ value: b, label: BG_LABELS[b] }))]}
               />
-            </div>
-            <div className="kv">
-              <span>最短の長さ</span>
-              <div className="hstack">
-                <Num value={scene.minDurationSec} step={0.1} min={0.5} max={15} placeholder="自動" onChange={(v) => set('minDurationSec', v || undefined)} style={{ width: 90 }} />
-                <span className="caption">秒（セリフが長ければ自動で延びます）</span>
-              </div>
             </div>
             {scene.type === 'talk' ? (
               <>
@@ -198,182 +187,63 @@ export const SceneInspector: React.FC<{ project: Project; index: number; update:
   );
 };
 
-/* ---------------- セリフ ---------------- */
+/* ---------------- 長さ ---------------- */
 
-const LinesEditor: React.FC<{ project: Project; index: number; update: Update; runJob?: RunJob }> = ({ project, index, update, runJob }) => {
-  const scene = project.scenes[index];
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-  const play = (src: string) => {
-    audioRef.current?.pause();
-    audioRef.current = new Audio(`/files/${project.id}/${src}?t=${Date.now()}`);
-    audioRef.current.play();
-  };
-  return (
-    <Section title="セリフ" right={<span className="caption">上から順に話します</span>}>
-      <div className="group">
-        {scene.lines.map((l, li) => (
-          <LineCard key={l.id} project={project} index={index} li={li} line={l} update={update} runJob={runJob} play={play} />
-        ))}
-        <Cell
-          className="cell-action"
-          onClick={() =>
-            update((p) => void p.scenes[index].lines.push({ id: `l-${rid()}`, speaker: project.cast[0]?.id ?? 'narrator', text: '', style: 'bubble' }))
-          }
-        >
-          <Ic n={Plus} size={14} mr={0} />
-          セリフを追加
-        </Cell>
-      </div>
-    </Section>
-  );
-};
-
-const LineCard: React.FC<{
-  project: Project;
-  index: number;
-  li: number;
-  line: Line;
-  update: Update;
-  runJob?: RunJob;
-  play: (src: string) => void;
-}> = ({ project, index, li, line: l, update, runJob, play }) => {
-  const meta = useContext(MetaContext)!;
-  const [open, setOpen] = useState(false);
-  const scene = project.scenes[index];
-  const tts = ttsFor(meta, project.audio.ttsProvider);
-  const narration = project.audio.narration;
-  const stale = isAudioStale(l, project.cast, tts.engine);
-  const setLine = (patch: Partial<Line>) => update((p) => void Object.assign(p.scenes[index].lines[li], patch));
-  const isCast = project.cast.some((c) => c.id === l.speaker);
-  const bubble = l.style === 'bubble' || l.style === 'bubble-accent';
-  const redo = async () => {
-    if (!runJob) return;
-    const fresh = await regenerateLine(project, l.id, runJob);
-    if (fresh) play(fresh.src);
-  };
-  const move = (d: number) =>
-    update((p) => {
-      const a = p.scenes[index].lines;
-      const j = li + d;
-      if (j < 0 || j >= a.length) return;
-      [a[j], a[li]] = [a[li], a[j]];
-    });
-
-  // しっぽは画面の形（縦型・正方形・横型）ごとに持つ
-  const tailKey = `line:${l.id}`;
-  const tail = readAdjust(scene, tailKey, project.format).tail;
-  const setTail = (t: { dx: number; dy: number; hidden?: boolean } | undefined) =>
+/**
+ * シーンの長さ。ふだんは自動（セリフと文字を読む時間から決まる）で、−／＋で伸び縮みできる。
+ * カットはBGMの拍に合わせるので、1拍（8分音符）ずつ変わる。セリフの途中では切れない
+ */
+const LengthControl: React.FC<{ project: Project; index: number; timing: SceneTiming; update: Update }> = ({ project, index, timing, update }) => {
+  const fps = project.fps;
+  const cur = timing.duration / fps;
+  const beat = project.audio.bpm > 0 ? 60 / project.audio.bpm / 2 : 0.1;
+  const setLen = (sec: number | null) =>
     update((p) => {
       const sc = p.scenes[index];
-      const map = { ...sceneLayout(sc, p.format) };
-      const next = normalizeAdjust({ ...readAdjust(sc, tailKey, p.format), tail: t });
-      if (next) map[tailKey] = next;
-      else delete map[tailKey];
-      setSceneLayout(sc, p.format, map);
+      if (!sc) return;
+      if (sec == null) delete sc.lengthSec;
+      else sc.lengthSec = Math.round(Math.min(60, Math.max(timing.minSec, sec)) * 100) / 100;
     });
-
+  const canShorten = cur - beat >= timing.minSec - 0.05;
+  const hasSpeech = timing.lines.length > 0;
   return (
-    <div className="line-card cell" style={{ display: 'block', padding: 0 }}>
-      <div className="line-main">
-        <SpeakerPicker project={project} value={l.speaker} onChange={(v) => setLine({ speaker: v })} />
-        <Text bare multiline rows={1} value={l.text} onChange={(v) => setLine({ text: v })} placeholder="セリフを入力" />
-        <div className="line-tools">
-          {narration && l.audio ? (
-            <button className="icon-btn sm" onClick={() => play(l.audio!.src)} title={stale ? '前の音声を再生（今の内容とは違います）' : '音声を再生'}>
-              <Ic n={Play} size={13} mr={0} />
+    <Section
+      title="長さ"
+      footer={
+        <>
+          下のタイムラインでシーンの右端をドラッグしても変えられます
+          {hasSpeech ? `。セリフは切れないので${timing.minSec.toFixed(1)}秒より短くはなりません` : ''}
+        </>
+      }
+    >
+      <div className="group">
+        <div className="cell">
+          <div className="stepper">
+            <button type="button" className="icon-btn" disabled={!canShorten} onClick={() => setLen(cur - beat)} title="短くする" aria-label="短くする">
+              <Ic n={Minus} size={15} mr={0} stroke={2.4} />
             </button>
-          ) : null}
-          <Popover
-            align="right"
-            button={({ open: o, toggle }) => (
-              <button className="icon-btn sm" aria-expanded={o} onClick={toggle} title="セリフの操作">
-                <Ic n={Ellipsis} size={14} mr={0} />
+            <div className="len-value">
+              {cur.toFixed(1)}
+              <small>秒</small>
+            </div>
+            <button type="button" className="icon-btn" disabled={cur + beat > 60} onClick={() => setLen(cur + beat)} title="長くする" aria-label="長くする">
+              <Ic n={Plus} size={15} mr={0} stroke={2.4} />
+            </button>
+          </div>
+          <span className="spacer" />
+          {timing.fixed ? (
+            <div className="len-auto">
+              <button type="button" className="btn sm" onClick={() => setLen(null)}>
+                自動に戻す
               </button>
-            )}
-          >
-            {(close) => (
-              <>
-                {runJob && narration ? (
-                  <MenuItem icon={RefreshCw} disabled={!tts.ready || !(l.text.trim() || l.speak?.trim())} onClick={() => (close(), redo())}>
-                    {l.audio ? '音声を作り直して聴く' : '音声を作って聴く'}
-                  </MenuItem>
-                ) : null}
-                <MenuItem icon={ArrowUp} disabled={li === 0} onClick={() => (close(), move(-1))}>
-                  上へ移動
-                </MenuItem>
-                <MenuItem icon={ArrowDown} disabled={li === scene.lines.length - 1} onClick={() => (close(), move(1))}>
-                  下へ移動
-                </MenuItem>
-                <div className="menu-sep" />
-                <MenuItem icon={Trash2} danger onClick={() => (close(), update((p) => void p.scenes[index].lines.splice(li, 1)))}>
-                  削除
-                </MenuItem>
-              </>
-            )}
-          </Popover>
+              <span className="caption">自動なら約{timing.autoSec.toFixed(1)}秒</span>
+            </div>
+          ) : (
+            <span className="badge">自動</span>
+          )}
         </div>
       </div>
-      <button type="button" className="line-meta" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
-        <span className="badge">{STYLE_LABELS[l.style]}</span>
-        {l.pose ? <span className="badge">{POSE_LABELS[l.pose]}</span> : null}
-        {l.emoji ? <span className="badge">{l.emoji}</span> : null}
-        {l.delivery ? <span className="badge ellipsis" style={{ maxWidth: 110 }}>{l.delivery}</span> : null}
-        {narration ? (
-          stale ? (
-            <span className="badge warn">{l.audio ? '音声を更新' : '音声なし'}</span>
-          ) : l.audio ? (
-            <span className="caption">{l.audio.durationSec.toFixed(1)}秒</span>
-          ) : null
-        ) : null}
-        <span className="spacer" />
-        <Ic n={open ? ChevronDown : ChevronRight} size={13} mr={0} />
-      </button>
-      {open ? (
-        <div className="line-detail">
-          <Field label="表示">
-            <Seg
-              block
-              value={l.style}
-              onChange={(v) => setLine({ style: v })}
-              options={(['bubble', 'bubble-accent', 'caption', 'none'] as const).map((v) => ({ value: v, label: STYLE_LABELS[v] }))}
-            />
-          </Field>
-          {isCast ? (
-            <Field label="表情">
-              <div className="hstack">
-                <PosePicker project={project} castId={l.speaker} value={l.pose} inherit onChange={(v) => setLine({ pose: v })} />
-              </div>
-            </Field>
-          ) : null}
-          <Field label="声の調子">
-            <div className="hstack">
-              <EmojiPicker value={l.emoji} onChange={(v) => setLine({ emoji: v })} />
-              <Text value={l.delivery} onChange={(v) => setLine({ delivery: v || undefined })} placeholder="演技の指示（例: 驚いて）" />
-            </div>
-          </Field>
-          <Field label="読み方" hint="英字のブランド名などを読み間違える時だけ、その語をカタカナに（句読点は残す）">
-            <Text value={l.speak} onChange={(v) => setLine({ speak: v || undefined })} placeholder="例: だったら、スシトップ オーシーアール！" />
-          </Field>
-          {bubble ? (
-            <Field label="吹き出しのしっぽ" hint="位置は映像の上で吹き出しを選び、先端の点をドラッグして変えられます">
-              <div className="hstack">
-                <Seg
-                  value={tail?.hidden ? 'off' : 'on'}
-                  onChange={(v) => setTail({ dx: tail?.dx ?? 0, dy: tail?.dy ?? 0, hidden: v === 'off' ? true : undefined })}
-                  options={[
-                    { value: 'on', label: 'あり' },
-                    { value: 'off', label: 'なし' },
-                  ]}
-                />
-                <button className="btn sm plain" disabled={!tail} onClick={() => setTail(undefined)}>
-                  位置を戻す
-                </button>
-              </div>
-            </Field>
-          ) : null}
-        </div>
-      ) : null}
-    </div>
+    </Section>
   );
 };
 

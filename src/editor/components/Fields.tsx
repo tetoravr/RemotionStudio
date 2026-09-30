@@ -250,17 +250,37 @@ export const Cell: React.FC<{
   </div>
 );
 
-/** 開閉できる詳細。plain=グループの外で使う控えめな見た目 */
+/**
+ * 開閉できる詳細。最初から開いておき、閉じたらそのことを覚えておく（見出しの文字ごと・このブラウザだけ）。
+ * plain=グループの外で使う控えめな見た目
+ */
 export const Disclosure: React.FC<{
   summary: React.ReactNode;
   children: React.ReactNode;
   defaultOpen?: boolean;
   plain?: boolean;
   right?: React.ReactNode;
-}> = ({ summary, children, defaultOpen, plain, right }) => {
-  const [open, setOpen] = useState(Boolean(defaultOpen));
+}> = ({ summary, children, defaultOpen = true, plain, right }) => {
+  const key = typeof summary === 'string' ? `ad-studio:disclosure:${summary}` : null;
+  const [open, setOpen] = useState(() => {
+    try {
+      const v = key ? localStorage.getItem(key) : null;
+      if (v != null) return v === '1';
+    } catch {
+      /* 保存できない環境では既定のまま */
+    }
+    return defaultOpen;
+  });
+  const toggle = (next: boolean) => {
+    setOpen(next);
+    try {
+      if (key) localStorage.setItem(key, next ? '1' : '0');
+    } catch {
+      /* 保存できない環境では覚えない */
+    }
+  };
   return (
-    <details className={`disclosure ${plain ? 'plain' : ''}`} open={open} onToggle={(e) => setOpen((e.currentTarget as HTMLDetailsElement).open)}>
+    <details className={`disclosure ${plain ? 'plain' : ''}`} open={open} onToggle={(e) => toggle((e.currentTarget as HTMLDetailsElement).open)}>
       <summary>
         <span className="chev" style={{ display: 'inline-flex' }}>
           <Ic n={ChevronRight} size={13} mr={0} />

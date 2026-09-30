@@ -15,6 +15,7 @@ import { go, MetaContext } from '../App';
 import { AudioPanel } from '../components/AudioPanel';
 import { BrandPanel } from '../components/BrandPanel';
 import { CastPanel } from '../components/CastPanel';
+import { LinesPanel } from '../components/LinesPanel';
 import { confirmDialog } from '../components/Dialogs';
 import { Progress, Seg, Sheet } from '../components/Fields';
 import { RenderDialog } from '../components/RenderDialog';
@@ -375,6 +376,85 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
     if (activeSceneId) lastScene.current = activeSceneId;
   }, [activeSceneId]);
 
+  // 再生位置が動いたら、シーン一覧・セリフ・右の設定をそのシーンに合わせる（再生中もシーク中も）。
+  // 編集で長さが変わっただけの時は選択を変えない（入力中に別のシーンへ切り替わらないように）
+  const selectedIdx = useRef(0);
+  selectedIdx.current = selected;
+  useEffect(() => {
+    // 毎フレーム呼ばれるので、変わった時だけ更新する（同じ値でも更新を積むと再生中に描き直しが連鎖する）
+    if (curIdx >= 0 && curIdx !== selectedIdx.current) setSelected(curIdx);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [frame]);
+
+  /** 取り消しの記録を1つ積む（ドラッグなど、連続した操作の始まりに1回だけ） */
+  const pushHistory = useCallback(() => {
+    const cur = projectRef.current;
+    if (!cur) return;
+    history.current.past.push(cur);
+    if (history.current.past.length > 60) history.current.past.shift();
+    history.current.future = [];
+  }, []);
+
+  /**
+   * 構成が変わった（追加・並べ替え・複製・削除・長さの変更）あと、そのシーンへ再生位置を移す。
+   * 時間の並びが計算し直されてから動かす。edge=true はシーンの最後のコマ（長さを変えている時の見た目の確認用）
+   */
+  const pendingSeek = useRef<{ id: string; edge?: boolean } | null>(null);
+  useEffect(() => {
+    if (!timeline || !project) return;
+    const player = playerRef.current;
+    const want = pendingSeek.current;
+    if (want) {
+      const i = project.scenes.findIndex((x) => x.id === want.id);
+      const st = timeline.scenes[i];
+      if (!st) return;
+      pendingSeek.current = null;
+      setSelected(i);
+      player?.seekTo(want.edge ? st.start + st.duration - 1 : st.start + Math.min(st.duration - 1, Math.round(st.duration * 0.62)));
+      return;
+    }
+    // セリフの編集や取り消しで長さが変わっても、再生位置が選んでいるシーンからはみ出さないように
+    if (!player || player.isPlaying()) return;
+    const st = timeline.scenes[Math.min(selectedIdx.current, timeline.scenes.length - 1)];
+    const f = player.getCurrentFrame();
+    if (st && (f < st.start || f >= st.start + st.duration)) player.seekTo(Math.max(st.start, Math.min(st.start + st.duration - 1, f)));
+  }, [timeline, project]);
+
+  /** シーンの長さを変える（sec=null で自動に戻す） */
+  const resizeFresh = useRef(false);
+  const resizeScene = useCallback(
+    (i: number, sec: number | null, phase: 'start' | 'move' | 'end') => {
+      if (phase === 'start') {
+        // 取り消しの記録は、実際に動かし始めた時に1回だけ積む（つまみを押しただけでは長さを固定しない）
+        resizeFresh.current = true;
+        return;
+      }
+      if (phase === 'end' && sec != null) {
+        resizeFresh.current = false;
+        return;
+      }
+      // 自動のままのシーンを「自動に戻す」は何もしない（取り消しの記録も積まない）
+      if (sec == null && projectRef.current?.scenes[i]?.lengthSec == null) return;
+      if (phase === 'move' && resizeFresh.current) {
+        resizeFresh.current = false;
+        pushHistory();
+      }
+      const id = projectRef.current?.scenes[i]?.id;
+      if (id) pendingSeek.current = { id, edge: true };
+      update(
+        (p) => {
+          const sc = p.scenes[i];
+          if (!sc) return;
+          if (sec == null) delete sc.lengthSec;
+          else sc.lengthSec = Math.round(sec * 10) / 10;
+        },
+        // ドラッグ中は開始時に1回だけ履歴を積んでいるので、ここでは積まない（ダブルクリックでの「自動に戻す」は積む）
+        { silent: sec != null },
+      );
+    },
+    [pushHistory, update],
+  );
+
   const selectElement = useCallback((elId: string) => {
     playerRef.current?.pause();
     setSelectedEl(elId);
@@ -405,6 +485,7 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
 
   const moveScene = (from: number, to: number) => {
     if (to < 0 || to >= project.scenes.length || from === to) return;
+    pendingSeek.current = { id: project.scenes[from].id };
     update((p) => {
       const [s] = p.scenes.splice(from, 1);
       p.scenes.splice(to, 0, s);
@@ -414,6 +495,7 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
 
   const addScene = (type: SceneType) => {
     const s = remapCast(newScene(type, project.brand.name), project.cast.map((c) => c.id));
+    pendingSeek.current = { id: s.id };
     update((p) => {
       p.scenes.splice(sel + 1, 0, s);
     });
@@ -425,6 +507,8 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
     if (project.scenes.length <= 1) return;
     const ok = await confirmDialog({ title: `シーン${i + 1}を削除しますか？`, message: '⌘Z（Ctrl+Z）で元に戻せます。', ok: '削除', danger: true });
     if (!ok) return;
+    const next = project.scenes[i - 1] ?? project.scenes[i + 1];
+    if (next) pendingSeek.current = { id: next.id };
     update((p) => void p.scenes.splice(i, 1));
     setSelected((cur) => Math.max(0, cur >= i ? cur - 1 : cur));
   };
@@ -501,7 +585,9 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
           onSelect={selectScene}
           onMove={moveScene}
           onDuplicate={(i) => {
-            update((p) => void p.scenes.splice(i + 1, 0, cloneScene(p.scenes[i])));
+            const c = cloneScene(project.scenes[i]);
+            pendingSeek.current = { id: c.id };
+            update((p) => void p.scenes.splice(i + 1, 0, c));
             setSelected(i + 1);
           }}
           onDelete={deleteScene}
@@ -564,18 +650,20 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
               <div className="stage-hint">{selectedEl ? 'ドラッグで移動・ダブルクリックで文字を編集・Esc で選択を解除' : 'クリックで選択・ダブルクリックで文字を編集'}</div>
             ) : null}
           </div>
-          <Transport
-            player={playerRef}
-            frame={frame}
-            total={timeline.total}
-            fps={project.fps}
-            playing={playing}
-            muted={muted}
-            scenes={timeline.scenes}
-            current={curIdx}
-            onScrub={() => setSelectedEl(null)}
-          />
         </main>
+
+        <LinesPanel
+          project={project}
+          index={sel}
+          timing={timeline.scenes[sel]}
+          localFrame={curIdx === sel && timeline.scenes[sel] ? frame - timeline.scenes[sel].start : -1}
+          update={update}
+          runJob={runJob}
+          onSeek={(f) => {
+            const st = timeline.scenes[sel];
+            if (st) playerRef.current?.seekTo(st.start + f);
+          }}
+        />
 
         <aside className="inspector">
           <div className="inspector-head">
@@ -601,6 +689,20 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
           </div>
         </aside>
       </div>
+
+      {/* 再生バーは画面の幅いっぱいに（シーンの長さを細かく変えられるように） */}
+      <Transport
+        player={playerRef}
+        frame={frame}
+        total={timeline.total}
+        fps={project.fps}
+        playing={playing}
+        muted={muted}
+        scenes={timeline.scenes}
+        current={curIdx}
+        onScrub={() => setSelectedEl(null)}
+        onResize={resizeScene}
+      />
 
       {job ? (
         <Sheet>

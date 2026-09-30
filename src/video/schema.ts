@@ -168,6 +168,11 @@ const sceneBase = {
   background: BackgroundKind.optional(),
   /** 最低表示時間（秒）。セリフが長ければ自動で延びる */
   minDurationSec: z.number().min(0.5).max(15).optional(),
+  /**
+   * シーンの長さ（秒）を手で決める。未指定なら自動（セリフの長さと文字を読む時間から決まる）。
+   * セリフの音声は切らないので、最後のセリフが言い終わるまでより短くはならない
+   */
+  lengthSec: z.number().min(0.3).max(60).optional(),
 };
 
 export const LogoScene = z.object({
