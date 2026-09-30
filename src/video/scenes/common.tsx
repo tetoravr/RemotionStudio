@@ -1,5 +1,6 @@
 import React from 'react';
 import { Editable, useEditMode } from '../edit/Editable';
+import { normalizeAdjust, readAdjust } from '../edit/textEdit';
 import { AbsoluteFill, interpolate, useCurrentFrame } from 'remotion';
 import { clamp, shake } from '../anim';
 import { Character, characterGeometry } from '../components/Character';
@@ -38,6 +39,7 @@ export const useShowAll = () => {
 export const SceneBubbles: React.FC<{ fallbackY?: number; minTipY?: number }> = ({ fallbackY, minTipY }) => {
   const { timing } = useScene();
   const showAll = useShowAll();
+  const edit = useEditMode();
   const { layout, project } = useTheme();
   const { u, width: W, height: H } = layout;
   return (
@@ -55,7 +57,7 @@ export const SceneBubbles: React.FC<{ fallbackY?: number; minTipY?: number }> = 
           tipY = Math.max(minTipY ?? 0, g.headY + 10 * u);
         }
         return (
-          <Editable key={lt.line.id} id={`line:${lt.line.id}`} z={20} text={{ target: { type: 'line', lineId: lt.line.id }, value: lt.line.text }}>
+          <Editable key={lt.line.id} id={`line:${lt.line.id}`} z={20} barAt={(readAdjust(timing.scene, `line:${lt.line.id}`, layout.format).tail?.dy ?? 0) < -150 * u ? 'bottom' : 'top'} text={{ target: { type: 'line', lineId: lt.line.id }, value: lt.line.text }}>
           <SpeechBubble
             text={lt.line.text}
             tipX={tipX}
@@ -65,6 +67,22 @@ export const SceneBubbles: React.FC<{ fallbackY?: number; minTipY?: number }> = 
             variant={style === 'bubble-accent' ? 'accent' : 'white'}
             fontSize={layout.portrait ? 54 * u : 50 * u}
             maxWidth={layout.portrait ? W - layout.safe * 2 : W * 0.46}
+            tailOffset={readAdjust(timing.scene, `line:${lt.line.id}`, layout.format).tail}
+            tailEdit={
+              // 直接調整でこの吹き出しを選んでいる時だけ、しっぽの先端をドラッグできる
+              showAll && edit?.selectedId === `line:${lt.line.id}`
+                ? (() => {
+                    const adj = readAdjust(timing.scene, `line:${lt.line.id}`, layout.format);
+                    return {
+                      screenScale: edit.compScale * adj.scale,
+                      rotate: adj.rotate,
+                      begin: edit.beginGesture,
+                      // しっぽも画面の形ごとに、吹き出しの調整として保存する
+                      set: (o) => edit.commit(timing.scene.id, `line:${lt.line.id}`, normalizeAdjust({ ...adj, tail: { ...adj.tail, dx: o.dx, dy: o.dy } }), true),
+                    };
+                  })()
+                : undefined
+            }
           />
           </Editable>
         );

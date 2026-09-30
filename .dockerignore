@@ -1,0 +1,12 @@
+node_modules
+dist
+out
+projects
+voices
+.env
+.env.*
+!.env.example
+.git
+.claude
+*.log
+SUSHI UI

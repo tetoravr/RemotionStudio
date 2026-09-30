@@ -1,6 +1,8 @@
 import { bundle } from '@remotion/bundler';
 import { ensureBrowser, renderMedia, selectComposition } from '@remotion/renderer';
+import express from 'express';
 import fs from 'node:fs';
+import type { AddressInfo } from 'node:net';
 import path from 'node:path';
 import type { Project } from '../src/video/schema';
 import { config, ROOT } from './env';
@@ -40,6 +42,23 @@ export const getBundle = (onProgress?: (p: number) => void) => {
 };
 
 const serial = createMutex();
+
+/**
+ * 書き出し中の Chromium にだけ素材を配信する一時サーバー（127.0.0.1 の空きポート）。
+ * 公開用の /files はログインが必要なので、書き出しはこちらから読む。
+ */
+export const withFileServer = async <T,>(fn: (url: string) => Promise<T>) => {
+  const app = express();
+  app.use('/files', express.static(config.projectsDir));
+  const server = app.listen(0, '127.0.0.1');
+  await new Promise((r) => server.once('listening', r));
+  const { port } = server.address() as AddressInfo;
+  try {
+    return await fn(`http://127.0.0.1:${port}`);
+  } finally {
+    server.close();
+  }
+};
 
 export type RenderOptions = {
   project: Project;

@@ -1,5 +1,6 @@
 import { Plus, Sparkles } from 'lucide-react';
 import { ElementList } from './ElementList';
+import { normalizeAdjust, readAdjust, sceneLayout, setSceneLayout } from '../../video/edit/textEdit';
 import React, { useContext, useRef } from 'react';
 import { ICON_LABELS } from '../../video/components/Icon';
 import { IRODORI_EMOJI } from '../../video/emotions';
@@ -290,6 +291,39 @@ const LinesEditor: React.FC<{ project: Project; index: number; update: Update; t
                 <Select value={l.pose ?? ''} onChange={(v) => setLine(li, { pose: (v || undefined) as Line['pose'] })} options={[{ value: '', label: '変えない' }, ...POSES.map((p) => ({ value: p, label: POSE_LABELS[p] }))]} />
               </Field>
             </div>
+            {l.style === 'bubble' || l.style === 'bubble-accent' ? (
+              <Field label="吹き出しのしっぽ" hint="位置と向きは、プレビューの「直接調整」で吹き出しを選び、オレンジの点をドラッグして変えられます">
+                <div className="chips">
+                  {(() => {
+                    // しっぽは画面の形（縦型・正方形・横型）ごとに持つ
+                    const key = `line:${l.id}`;
+                    const t = readAdjust(scene, key, project.format).tail;
+                    const setTail = (tail: { dx: number; dy: number; hidden?: boolean } | undefined) =>
+                      update((p) => {
+                        const sc = p.scenes[index];
+                        const map = { ...sceneLayout(sc, p.format) };
+                        const next = normalizeAdjust({ ...readAdjust(sc, key, p.format), tail });
+                        if (next) map[key] = next;
+                        else delete map[key];
+                        setSceneLayout(sc, p.format, map);
+                      });
+                    return (
+                      <>
+                        <button className={`chip ${!t?.hidden ? 'on' : ''}`} onClick={() => setTail({ dx: t?.dx ?? 0, dy: t?.dy ?? 0 })}>
+                          あり
+                        </button>
+                        <button className={`chip ${t?.hidden ? 'on' : ''}`} onClick={() => setTail({ dx: t?.dx ?? 0, dy: t?.dy ?? 0, hidden: true })}>
+                          なし
+                        </button>
+                        <button className="chip" disabled={!t} onClick={() => setTail(undefined)}>
+                          位置を戻す
+                        </button>
+                      </>
+                    );
+                  })()}
+                </div>
+              </Field>
+            ) : null}
             {ttsFor(meta, project.audio.ttsProvider).provider === 'irodori' ? (
               <Field label="感情（Irodori-TTS）" hint="セリフの前に付く絵文字で、声の調子が変わります。効き方は文脈によって変わります">
                 <div className="chips">

@@ -7,7 +7,8 @@ import type { AudioSettings, CastMember, Line } from '../../src/video/schema';
 import { config } from '../env';
 import { runFfmpeg, wavDurationSec } from '../ffmpeg';
 import { getOpenAI } from './client';
-import { ensureVoice, localVoices } from './voices';
+import { applyEq, bandProfile, correctionCurve, EQ_ENABLED, eqKey, loadEq, saveEq } from './voiceEq';
+import { ensureVoice, localVoiceFile, localVoices } from './voices';
 
 export const OPENAI_VOICES = [
   { id: 'coral', label: 'Coral（明るい女性）' },
@@ -96,10 +97,10 @@ export const trimAndNormalize = (input: Int16Array | Float32Array, rate = TTS_RA
   while (start < f.length && !loud(start)) start += win;
   let end = f.length;
   while (end > start && !loud(Math.max(0, end - win))) end -= win;
-  end = dropTrailingNoise(f, rate, start, end);
+  ({ start, end } = speechRange(f, rate, start, end));
   start = Math.max(0, start - Math.round(rate * 0.08));
   end = Math.min(f.length, end + Math.round(rate * 0.14));
-  const out = f.slice(start, Math.max(start + 1, end));
+  const out = compressSilences(f.slice(start, Math.max(start + 1, end)), rate);
   // 音声部分の RMS を -16dBFS に揃える（ピークは -1dBFS で制限）
   let sum = 0;
   let n = 0;
@@ -127,10 +128,14 @@ export const trimAndNormalize = (input: Int16Array | Float32Array, rate = TTS_RA
  * TTS（特に感情の絵文字つき）は、発話が終わって少し間があいたあとに、小さな音が付くことがある。
  * 判定: 直前の音との間が 0.15 秒以上あり、かつ 音量が本体の 30% 未満 か 0.12 秒未満。
  */
-export const dropTrailingNoise = (f: Float32Array, rate: number, start: number, end: number) => {
+/**
+ * 声の本体の範囲（サンプル位置）。読み始めの前・読み終わりの後に、間をあけて取り残された短い音（息・クリック・笑い声のかけら）を外す。
+ * 外す条件: 本体との間が 0.15 秒以上で「小さい（本体の30%未満）か 0.12 秒未満」、または 間が 0.35 秒以上で 0.35 秒未満の音。
+ */
+export const speechRange = (f: Float32Array, rate: number, start: number, end: number) => {
   const hop = Math.round(rate * 0.01);
   const n = Math.floor((end - start) / hop);
-  if (n < 4) return end;
+  if (n < 4) return { start, end };
   const rms: number[] = [];
   for (let i = 0; i < n; i++) {
     let sum = 0;
@@ -139,9 +144,8 @@ export const dropTrailingNoise = (f: Float32Array, rate: number, start: number, 
   }
   const max = Math.max(...rms);
   const on = rms.map((v) => v > max * 0.05);
-  const gapMax = 15; // 0.15 秒までの切れ目は、同じ発話の中とみなす
-  // 音のかたまり（島）に分ける
-  const islands: { a: number; b: number; peak: number }[] = [];
+  const gapMax = 15;
+  const islands: { a: number; b: number; peak: number; energy: number }[] = [];
   let i = 0;
   while (i < n) {
     if (!on[i]) {
@@ -150,26 +154,71 @@ export const dropTrailingNoise = (f: Float32Array, rate: number, start: number, 
     }
     let last = i;
     let peak = 0;
+    let energy = 0;
     for (let j = i; j < n && j - last <= gapMax; j++) {
       if (on[j]) {
         last = j;
         peak = Math.max(peak, rms[j]);
       }
+      energy += rms[j] * rms[j];
     }
-    islands.push({ a: i, b: last + 1, peak });
+    islands.push({ a: i, b: last + 1, peak, energy });
     i = last + 1;
   }
-  while (islands.length > 1) {
-    const cur = islands[islands.length - 1];
-    const prev = islands[islands.length - 2];
-    const gap = cur.a - prev.b;
-    const weak = cur.peak < max * 0.3 || cur.b - cur.a < 12;
-    if (gap >= gapMax && weak) islands.pop();
-    else break;
-  }
-  const last = islands[islands.length - 1];
-  return last ? Math.min(end, start + last.b * hop) : end;
+  if (!islands.length) return { start, end };
+  // 一番エネルギーの大きいかたまりを「本体」とし、両端の取り残された音を外していく
+  const main = islands.reduce((m, x) => (x.energy > m.energy ? x : m));
+  const stray = (x: (typeof islands)[number], gap: number) =>
+    x !== main && ((gap >= gapMax && (x.peak < max * 0.3 || x.b - x.a < 12)) || (gap >= 35 && x.b - x.a < 35));
+  while (islands.length > 1 && stray(islands[islands.length - 1], islands[islands.length - 1].a - islands[islands.length - 2].b)) islands.pop();
+  while (islands.length > 1 && stray(islands[0], islands[1].a - islands[0].b)) islands.shift();
+  return { start: start + islands[0].a * hop, end: Math.min(end, start + islands[islands.length - 1].b * hop) };
 };
+
+/** 発話の途中の長すぎる無音（0.45 秒超）を 0.3 秒に詰める。短いセリフが間延びしたり、途切れて聞こえるのを防ぐ */
+export const compressSilences = (f: Float32Array, rate: number, maxGap = 0.45, keep = 0.3) => {
+  const hop = Math.round(rate * 0.01);
+  const n = Math.floor(f.length / hop);
+  let max = 0;
+  const rms: number[] = [];
+  for (let i = 0; i < n; i++) {
+    let sum = 0;
+    for (let k = i * hop; k < (i + 1) * hop; k++) sum += f[k] * f[k];
+    rms.push(Math.sqrt(sum / hop));
+    max = Math.max(max, rms[i]);
+  }
+  const quiet = rms.map((v) => v < max * 0.03);
+  const cut: [number, number][] = [];
+  for (let i = 0; i < n; ) {
+    if (!quiet[i]) {
+      i++;
+      continue;
+    }
+    let j = i;
+    while (j < n && quiet[j]) j++;
+    // 先頭・末尾の無音は trimAndNormalize が扱うので、途中だけ
+    if (i > 0 && j < n && (j - i) * hop > maxGap * rate) {
+      const half = Math.round((keep * rate) / 2);
+      cut.push([i * hop + half, j * hop - half]);
+    }
+    i = j;
+  }
+  if (!cut.length) return f;
+  const parts: Float32Array[] = [];
+  let pos = 0;
+  for (const [a, b] of cut) {
+    parts.push(f.subarray(pos, a));
+    pos = b;
+  }
+  parts.push(f.subarray(pos));
+  const out = new Float32Array(parts.reduce((s, p) => s + p.length, 0));
+  let o = 0;
+  for (const p of parts) (out.set(p, o), (o += p.length));
+  return out;
+};
+
+/** 互換用（末尾だけを見る旧版） */
+export const dropTrailingNoise = (f: Float32Array, rate: number, start: number, end: number) => speechRange(f, rate, start, end).end;
 
 export const encodeWav = (samples: Float32Array, rate: number) => {
   const buf = Buffer.alloc(44 + samples.length * 2);
@@ -269,7 +318,15 @@ export type SynthOptions = {
   /** Irodori-TTS の感情絵文字（セリフの前に付けて読み上げる） */
   emoji?: string;
   provider?: TtsProvider;
+  /** 乱数シードを上書きする（崩れた音声を作り直す時に使う） */
+  seed?: number;
 };
+
+/** 読み上げる文字数（記号・空白を除く） */
+export const spokenChars = (text: string) => text.replace(/[\s、。，．,.！？!?…・「」『』（）()ー〜~"'“”]/g, '').length;
+
+/** 文字数と話速から見た、自然な長さ（秒）の目安 */
+export const expectedSpeechSec = (text: string, speed = 1) => spokenChars(text) / (7 * Math.max(0.5, speed)) + 0.35;
 
 /** OpenAI TTS: 24kHz の PCM */
 const synthOpenAI = async (text: string, voice: CastMember['voice'], delivery?: string) => {
@@ -281,6 +338,8 @@ const synthOpenAI = async (text: string, voice: CastMember['voice'], delivery?: 
     input: text,
     instructions: instructions || undefined,
     response_format: 'pcm',
+    // 話速は生成時に付ける（同梱の ffmpeg には早回しのフィルターが無いので、あとから伸縮しない）
+    speed: Math.min(4, Math.max(0.25, voice.speed || 1)),
   });
   const raw = Buffer.from(await res.arrayBuffer());
   const even = raw.subarray(0, raw.length - (raw.length % 2));
@@ -317,7 +376,8 @@ const synthIrodori = async (text: string, voice: CastMember['voice'], opts: Synt
   const caption = irodoriCaption(voice, opts.delivery);
   const irodori: Record<string, unknown> = {};
   if (caption) irodori.caption = caption;
-  if (voice.seed != null) irodori.seed = voice.seed;
+  if (opts.seed != null) irodori.seed = opts.seed;
+  else if (voice.seed != null) irodori.seed = voice.seed;
   if (config.tts.irodoriSteps) irodori.num_steps = config.tts.irodoriSteps;
   // 話速はモデル自身に任せる（時間を伸縮するより自然）。1 より小さいほど速く話す
   const speed = voice.speed || 1;
@@ -330,7 +390,8 @@ const synthIrodori = async (text: string, voice: CastMember['voice'], opts: Synt
       headers: irodoriHeaders(),
       body: JSON.stringify({
         model: config.tts.irodoriModel,
-        input: `${opts.emoji ?? ''}${text}`,
+        // 短いセリフに感情の絵文字を付けると、笑い声や息などの音が混ざりやすいので付けない
+        input: `${opts.emoji && spokenChars(text) >= 6 ? opts.emoji : ''}${text}`,
         voice: refVoice,
         response_format: 'wav',
         irodori,
@@ -360,28 +421,83 @@ ${(e as Error).message}`,
  * 音声を作り、前後の無音を軽く整えて WAV で保存する。
  * provider は resolveProvider(project.audio.ttsProvider) の結果を渡す（省略時は環境設定に従う）
  */
+/** 音色補正の試し読み（声の特徴が出やすい、ふつうの文） */
+const CALIBRATION = [
+  'こんにちは。今日は新しいサービスについて、わかりやすくご紹介します。',
+  'まずは画面を見てください。スマホひとつで、すぐに始められます。',
+  'お客さまの声をもとに、使いやすさを大切にしてつくりました。',
+  'ぜひ一度、気軽に試してみてくださいね。',
+];
+const calibrating = new Map<string, Promise<number[] | null>>();
+
+/**
+ * 参照音声ごとの音色補正カーブ（dB）。初回だけ試し読みを生成して参照音声と比べ、以後はキャッシュを使う。
+ * 参照音声のファイルがこのアプリに無い（サーバーに手置きした）声は補正しない。
+ */
+export const voiceEqFor = async (refVoice: string | undefined): Promise<number[] | null> => {
+  if (!refVoice || refVoice === 'none' || !EQ_ENABLED()) return null;
+  const refFile = await localVoiceFile(refVoice);
+  if (!refFile) return null;
+  const key = await eqKey(refFile);
+  const cached = await loadEq(refVoice, key);
+  if (cached) return cached;
+  if (!calibrating.has(refVoice)) {
+    calibrating.set(
+      refVoice,
+      (async () => {
+        // 参照音声（mp3 などでも）を WAV にして分析する
+        let ref: { samples: Float32Array; rate: number };
+        if (/\.wav$/i.test(refFile)) ref = readWavSamples(await fs.readFile(refFile));
+        else {
+          const tmp = path.join(os.tmpdir(), `ref-${crypto.randomUUID()}.wav`);
+          await runFfmpeg(['-i', refFile, '-ac', '1', '-c:a', 'pcm_s16le', tmp]);
+          ref = readWavSamples(await fs.readFile(tmp));
+          await fs.rm(tmp, { force: true });
+        }
+        const gens: number[][] = [];
+        for (const [i, text] of CALIBRATION.entries()) {
+          const r = await synthIrodori(text, { voice: 'none', instructions: '', speed: 1, refVoice, seed: 100 + i }, {});
+          gens.push(bandProfile(trimAndNormalize(r.samples, r.rate), r.rate));
+        }
+        const gen = gens[0].map((_, b) => gens.reduce((s, g) => s + g[b], 0) / gens.length);
+        const gains = correctionCurve(bandProfile(ref.samples, ref.rate), gen);
+        await saveEq(refVoice, key, gains);
+        return gains;
+      })()
+        .catch((e) => {
+          console.warn(`[voice-eq] ${refVoice}: ${(e as Error).message}`);
+          return null;
+        })
+        .finally(() => calibrating.delete(refVoice)),
+    );
+  }
+  return calibrating.get(refVoice)!;
+};
+
 export const synthesizeToFile = async (text: string, voice: CastMember['voice'], out: string, opts: SynthOptions = {}) => {
   const outFile = path.resolve(out);
   const provider = opts.provider ?? resolveProvider();
   const { samples: raw, rate } = provider === 'irodori' ? await synthIrodori(text, voice, opts) : await synthOpenAI(text, voice, opts.delivery);
   if (!raw.length) throw new Error('音声が空でした');
-  const cleaned = trimAndNormalize(raw, rate);
-  // Irodori-TTS は生成時に話速を反映済み。OpenAI TTS だけ後から伸縮する
-  const speed = provider === 'irodori' ? 1 : Math.min(2, Math.max(0.5, voice.speed || 1));
-  await fs.mkdir(path.dirname(outFile), { recursive: true });
-  if (Math.abs(speed - 1) < 0.03) {
-    await fs.writeFile(outFile, encodeWav(cleaned, rate));
-  } else {
-    // わずかな話速調整のみ（1.1倍まで推奨。それ以上は不自然になりやすい）
-    const tmp = path.join(os.tmpdir(), `tts-${crypto.randomUUID()}.wav`);
-    await fs.writeFile(tmp, encodeWav(cleaned, rate));
-    try {
-      await runFfmpeg(['-i', tmp, '-af', `atempo=${speed.toFixed(3)}`, '-ar', String(Math.min(rate, 48000)), '-ac', '1', '-c:a', 'pcm_s16le', outFile]);
-    } finally {
-      await fs.rm(tmp, { force: true });
+  let cleaned = trimAndNormalize(raw, rate);
+  // Irodori は、まれに間延びしたり途中で詰まったりする。文字数に対して長すぎる時は、シードを変えて作り直し、一番自然な長さのものを使う
+  if (provider === 'irodori') {
+    const expected = expectedSpeechSec(text, voice.speed || 1);
+    const len = (s: Float32Array) => s.length / rate;
+    const off = (s: Float32Array) => Math.abs(Math.log(len(s) / expected));
+    for (let attempt = 1; attempt <= 2 && len(cleaned) > expected * 1.7 + 0.3; attempt++) {
+      const retry = await synthIrodori(text, voice, { ...opts, seed: (opts.seed ?? voice.seed ?? 0) + 7919 * attempt });
+      const c = trimAndNormalize(retry.samples, retry.rate);
+      if (retry.rate === rate && off(c) < off(cleaned)) cleaned = c;
     }
   }
-  const wav = await fs.readFile(outFile);
-  const parsed = readWavSamples(wav);
+  // 話速はどちらのエンジンも生成時に反映済み（Irodori は duration_scale、OpenAI は speed）
+  await fs.mkdir(path.dirname(outFile), { recursive: true });
+  // 参照音声の声は、コーデックで弱まった高い音域を参照音声に合わせて戻す
+  const gains = provider === 'irodori' ? await voiceEqFor(voice.refVoice) : null;
+  const finalSamples = gains ? applyEq(cleaned, rate, gains) : cleaned;
+  const wav = encodeWav(finalSamples, rate);
+  await fs.writeFile(outFile, wav);
+  const parsed = { samples: finalSamples, rate };
   return { durationSec: wavDurationSec(wav), mouth: mouthEnvelope(parsed.samples, parsed.rate) };
 };

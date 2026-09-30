@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { migrateLayouts } from '../src/video/edit/textEdit';
 import { Project, type ProjectInput } from '../src/video/schema';
 import { config } from './env';
 
@@ -26,7 +27,8 @@ export const loadProject = async (id: string): Promise<Project> => {
   const raw = await fs.readFile(projectFile(id), 'utf8').catch(() => {
     throw Object.assign(new Error('プロジェクトが見つかりません'), { status: 404 });
   });
-  return Project.parse(JSON.parse(raw));
+  // 旧形式の調整（画面の形を区別しない）を、今の画面の形のものとして移す
+  return migrateLayouts(Project.parse(JSON.parse(raw)));
 };
 
 export const saveProject = async (input: ProjectInput): Promise<Project> => {
@@ -47,6 +49,7 @@ export type ProjectSummary = {
   primary: string;
   scenes: number;
   updatedAt?: string;
+  updatedBy?: string;
   thumbnail?: string;
 };
 
@@ -67,6 +70,7 @@ export const listProjects = async (): Promise<ProjectSummary[]> => {
         primary: p.brand.colors.primary,
         scenes: p.scenes.length,
         updatedAt: p.updatedAt,
+        updatedBy: p.updatedBy,
         thumbnail: img ? (img.startsWith('lib:') ? `/${img.slice(4)}` : `/files/${p.id}/${img}`) : undefined,
       });
     } catch {

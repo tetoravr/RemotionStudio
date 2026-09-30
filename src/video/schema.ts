@@ -56,6 +56,11 @@ export const Line = z.object({
   text: z.string(),
   /** 読み上げ用テキスト（難読語をひらがなにする等）。空なら text を読む */
   speak: z.string().optional(),
+  /**
+   * 吹き出しのしっぽ。先端の位置を自動の位置からずらす量（コンポジション px）。
+   * 先端を吹き出しの上下左右どちらに置くかで、しっぽの向きも決まる。hidden でしっぽなし
+   */
+  tail: z.object({ dx: z.number().default(0), dy: z.number().default(0), hidden: z.boolean().optional() }).optional(),
   /** このセリフ中の話者ポーズ */
   pose: Pose.optional(),
   /** 演技指示（声のトーン）。例: 「驚いて」「落ち込んで小声で」「元気よく」 */
@@ -138,12 +143,23 @@ export const ElementAdjust = z.object({
   align: z.enum(['left', 'center', 'right']).optional(),
   /** 重なり順（直接調整で最後に触ったものほど大きい＝手前） */
   z: z.number().int().optional(),
+  /** 吹き出しのしっぽ（吹き出しの要素のみ）。先端を自動の位置からずらす量。hidden でしっぽなし */
+  tail: z.object({ dx: z.number().default(0), dy: z.number().default(0), hidden: z.boolean().optional() }).optional(),
+});
+
+/** 画面の形ごとの要素の調整（縦型で動かしても横型には影響しない） */
+export const SceneLayouts = z.object({
+  vertical: z.record(z.string(), ElementAdjust).optional(),
+  square: z.record(z.string(), ElementAdjust).optional(),
+  horizontal: z.record(z.string(), ElementAdjust).optional(),
 });
 export type ElementAdjust = z.infer<typeof ElementAdjust>;
 
 const sceneBase = {
   id: z.string(),
-  /** 要素ID -> 調整。IDは各シーンの Editable と対応（例: headline / char:0 / line:<セリフID>） */
+  /** 画面の形 -> 要素ID -> 調整。IDは各シーンの Editable と対応（例: headline / char:0 / line:<セリフID>） */
+  layouts: SceneLayouts.optional(),
+  /** 旧形式（画面の形を区別しない調整）。読み込み時に layouts へ移す */
   layout: z.record(z.string(), ElementAdjust).optional(),
   lines: z.array(Line).default([]),
   characters: z.array(CharacterPlacement).default([]),
@@ -292,6 +308,8 @@ export const Project = z.object({
   /** AI台本生成時の元ブリーフ（再生成用） */
   brief: z.record(z.string(), z.unknown()).optional(),
   updatedAt: z.string().optional(),
+  /** 最後に編集した人（ログイン時のメールアドレス） */
+  updatedBy: z.string().optional(),
 });
 export type Project = z.infer<typeof Project>;
 export type ProjectInput = z.input<typeof Project>;

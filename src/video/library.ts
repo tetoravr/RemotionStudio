@@ -33,6 +33,8 @@ export const LIBRARY_CHARACTERS: Record<string, LibraryCharacter> = {
       speed: DEFAULT_VOICE_SPEED,
       caption: '20代前半の日本人女性の声。明るく元気で親しみやすい。はっきり聞き取りやすく、テンポよく自然に話す。',
       seed: 42,
+      /** 標準の声（public/voices/hayami-saki.wav）。Irodori-TTS でこの声をまねる */
+      refVoice: 'hayami-saki',
     },
   },
   'osushi-chan': {
@@ -48,6 +50,8 @@ export const LIBRARY_CHARACTERS: Record<string, LibraryCharacter> = {
       speed: DEFAULT_VOICE_SPEED,
       caption: '小さくてかわいいマスコットの声。幼くて無邪気な、高めの声。のんびりゆっくり話し、語尾をやさしく伸ばす。',
       seed: 7,
+      /** 標準の声（public/voices/osushi-chan.wav） */
+      refVoice: 'osushi-chan',
     },
   },
 };

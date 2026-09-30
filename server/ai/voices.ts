@@ -63,7 +63,19 @@ const pruneCandidates = async () => {
   }
 };
 
+/** アプリに同梱の標準の声（標準キャラの既定の参照音声）。public/voices/ に置く */
+export const BUILTIN_VOICES: { id: string; label: string; file: string }[] = [
+  { id: 'hayami-saki', label: '速水さき（標準の声）', file: 'hayami-saki.wav' },
+  { id: 'osushi-chan', label: 'おすしちゃん（標準の声）', file: 'osushi-chan.wav' },
+];
+const builtinFile = (id: string) => {
+  const b = BUILTIN_VOICES.find((v) => v.id === id);
+  return b ? path.join(config.publicDir, 'voices', b.file) : null;
+};
+
 const localFile = async (id: string) => {
+  const builtin = builtinFile(id);
+  if (builtin) return (await fs.stat(builtin).catch(() => null)) ? builtin : null;
   for (const f of await fs.readdir(config.voicesDir).catch(() => [] as string[])) {
     if (path.parse(f).name === id && AUDIO_EXT.has(path.extname(f).toLowerCase())) return path.join(config.voicesDir, f);
   }
@@ -104,24 +116,28 @@ export const registerVoice = async ({
   const meta: VoiceMeta = { id, label: label?.trim() || id, caption, text, seed, createdAt: Date.now() };
   await fs.writeFile(path.join(config.voicesDir, `${id}.json`), JSON.stringify(meta, null, 2));
   await uploadToServer(id, file);
-  ensured.add(id);
+  const st = await fs.stat(file);
+  ensured.set(id, `${st.size}:${st.mtimeMs}`);
   return meta;
 };
 
 export const localVoices = async (): Promise<VoiceMeta[]> => {
   const out: VoiceMeta[] = [];
+  const builtins: VoiceMeta[] = [];
+  for (const b of BUILTIN_VOICES) if (await localFile(b.id)) builtins.push({ id: b.id, label: b.label, createdAt: 0 });
   for (const f of await fs.readdir(config.voicesDir).catch(() => [] as string[])) {
     if (!f.endsWith('.json')) continue;
     const meta = JSON.parse(await fs.readFile(path.join(config.voicesDir, f), 'utf8').catch(() => 'null')) as VoiceMeta | null;
     if (meta?.id && (await localFile(meta.id))) out.push(meta);
   }
-  return out.sort((a, b) => b.createdAt - a.createdAt);
+  return [...builtins, ...out.sort((a, b) => b.createdAt - a.createdAt)];
 };
 
 export const localVoiceFile = localFile;
 
 export const deleteVoice = async (id: string) => {
   if (!isSafeId(id)) throw new Error('invalid voice id');
+  if (builtinFile(id)) throw Object.assign(new Error('標準の声は削除できません'), { status: 400 });
   const file = await localFile(id);
   if (file) await fs.rm(file, { force: true });
   await fs.rm(path.join(config.voicesDir, `${id}.json`), { force: true });
@@ -129,19 +145,28 @@ export const deleteVoice = async (id: string) => {
   await fetch(`${baseUrl()}/audio/voices/${id}`, { method: 'DELETE', headers: irodoriHeaders(false) }).catch(() => undefined);
 };
 
-const ensured = new Set<string>();
+/** 確認済みの声（id → このアプリ側のファイルの版）。ファイルを差し替えたら版が変わるので確認し直す */
+const ensured = new Map<string, string>();
 
-/** 合成の前に、その声が Irodori サーバーにあるか確認し、無ければ控えから再登録する。force で確認済みの記憶を捨てる */
+/**
+ * 合成の前に、その声が Irodori サーバーにあるか確認し、無い・中身が違う時は控えから登録し直す。
+ * 同じ名前のままファイルを差し替えた場合（標準の声の更新など）も、サーバー側を新しい音声にそろえる。force で確認済みの記憶を捨てる
+ */
 export const ensureVoice = async (id: string, force = false) => {
+  if (id === 'none') return;
+  const file = await localFile(id);
+  const st = file ? await fs.stat(file).catch(() => null) : null;
+  const version = st ? `${st.size}:${st.mtimeMs}` : 'remote';
   if (force) ensured.delete(id);
-  if (id === 'none' || ensured.has(id)) return;
+  if (ensured.get(id) === version) return;
   const res = await fetch(`${baseUrl()}/audio/voices/${id}`, { headers: irodoriHeaders(false), signal: AbortSignal.timeout(5000) }).catch(() => null);
-  if (res?.ok) {
-    ensured.add(id);
+  const meta = res?.ok ? ((await res.json().catch(() => null)) as { bytes?: number } | null) : null;
+  // サーバーにあって、大きさもこのアプリの控えと同じならそのまま使う
+  if (meta && (!st || meta.bytes === st.size)) {
+    ensured.set(id, version);
     return;
   }
-  const file = await localFile(id);
   if (!file) return; // サーバー側にだけ手置きした音声の場合は、そのまま合成を試みる
   await uploadToServer(id, file);
-  ensured.add(id);
+  ensured.set(id, version);
 };

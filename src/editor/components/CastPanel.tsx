@@ -9,7 +9,7 @@ import type { RunJob, Update } from '../pages/Editor';
 import { VoiceLab } from './VoiceLab';
 import { Field, FilePick, Num, Select, Slider, Text } from './Fields';
 import { POSE_LABELS } from './SceneInspector';
-import { Mic, Play, Sparkles, X } from 'lucide-react';
+import { Download, Mic, Play, Sparkles, Square, X } from 'lucide-react';
 import { Ic } from '../icons';
 
 const STYLE_LABELS: Record<string, string> = {
@@ -241,6 +241,7 @@ const CastCard: React.FC<{ project: Project; member: CastMember; index: number; 
                   onChange={(v) => set((m) => void (m.voice.refVoice = v || undefined))}
                   options={[{ value: '', label: 'なし（キャプション＋シードで声を作る）' }, ...meta.tts.irodori.voices.map((v) => ({ value: v, label: meta.tts.irodori.labels?.[v] ?? v }))]}
                 />
+                {c.voice.refVoice ? <RefVoiceActions id={c.voice.refVoice} /> : null}
               </Field>
             </div>
             <Field label="話速" hint="1.0が標準。上げると、モデル自身が速く話します（音が不自然になりにくい）。セリフごとの感情は、シーンの「感情」「演技指示」で指定できます">
@@ -275,6 +276,41 @@ const CastCard: React.FC<{ project: Project; member: CastMember; index: number; 
           {previewErr ? <span className="faint" style={{ color: 'var(--danger)' }}>{previewErr}</span> : null}
         </div>
       </div>
+    </div>
+  );
+};
+
+/** 参照中の声を聞く・保存する */
+const RefVoiceActions: React.FC<{ id: string }> = ({ id }) => {
+  const [playing, setPlaying] = useState(false);
+  const audio = useRef<HTMLAudioElement | null>(null);
+  const url = `/api/tts/voices/${encodeURIComponent(id)}/file`;
+  return (
+    <div className="row center tight" style={{ marginTop: 6 }}>
+      <button
+        className="btn sm"
+        style={{ flex: 'none' }}
+        onClick={() => {
+          if (playing) {
+            audio.current?.pause();
+            setPlaying(false);
+            return;
+          }
+          audio.current?.pause();
+          const a = new Audio(url);
+          a.onended = () => setPlaying(false);
+          a.onerror = () => setPlaying(false);
+          audio.current = a;
+          a.play().then(() => setPlaying(true)).catch(() => setPlaying(false));
+        }}
+      >
+        <Ic n={playing ? Square : Play} size={12} />
+        {playing ? '停止' : '参照音声を聞く'}
+      </button>
+      <a className="btn sm" style={{ flex: 'none', textDecoration: 'none' }} href={`${url}?download=1`} download>
+        <Ic n={Download} size={12} />
+        ダウンロード
+      </a>
     </div>
   );
 };

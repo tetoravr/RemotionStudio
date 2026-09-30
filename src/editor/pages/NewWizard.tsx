@@ -4,7 +4,7 @@ import type { Project } from '../../video/schema';
 import { api, waitJob, type Job } from '../api';
 import { go } from '../App';
 import { Field, FilePick, Progress, Seg, Text } from '../components/Fields';
-import { ArrowLeft, Sparkles, X } from 'lucide-react';
+import { ArrowLeft, FileText, Link2, Sparkles, X } from 'lucide-react';
 import { Ic } from '../icons';
 
 type Brief = {
@@ -56,12 +56,42 @@ export const NewWizard: React.FC = () => {
   const [job, setJob] = useState<Job | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [shots, setShots] = useState<{ staged: string; name: string; url: string }[]>([]);
+  // URL・資料から読み込む
+  const [urls, setUrls] = useState('');
+  const [docs, setDocs] = useState<File[]>([]);
+  const [hint, setHint] = useState('');
+  const [colors, setColors] = useState<Project['brand']['colors'] | null>(null);
+  const [draft, setDraft] = useState<{ sources: { label: string; chars?: number; note?: string }[]; cautions: string[] } | null>(null);
+  const [reading, setReading] = useState<Job | null>(null);
+
+  const readSources = async () => {
+    setErr(null);
+    setReading({ id: '', kind: 'brief', status: 'running', progress: 0, message: '読み込みを始めています' });
+    try {
+      const list = urls.split(/\s+/).map((u) => u.trim()).filter(Boolean);
+      const { jobId } = await api.briefFromSources(list, docs, hint);
+      const done = await waitJob(jobId, setReading);
+      const r = done.result as { brief: Partial<Brief>; colors: Project['brand']['colors'] | null; sources: { label: string; chars?: number; note?: string }[]; cautions: string[] };
+      // 資料から読み取れた項目だけを上書きする（空の項目は今の入力を残す）
+      setB((o) => {
+        const next = { ...o };
+        for (const [k, v] of Object.entries(r.brief)) if (typeof v === 'string' && v.trim()) (next as Record<string, unknown>)[k] = v;
+        return next;
+      });
+      setColors(r.colors);
+      setDraft({ sources: r.sources, cautions: r.cautions });
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setReading(null);
+    }
+  };
   const set = (k: keyof Brief) => (v: string) => setB((o) => ({ ...o, [k]: v }));
 
   const submit = async () => {
     setErr(null);
     try {
-      const { jobId } = await api.post('/api/ai/storyboard', { brief: b, format, screenshots: shots.map((x) => ({ staged: x.staged, name: x.name })) });
+      const { jobId } = await api.post('/api/ai/storyboard', { brief: b, format, colors: colors ?? undefined, screenshots: shots.map((x) => ({ staged: x.staged, name: x.name })) });
       const done = await waitJob(jobId, setJob);
       go(`/p/${(done.result as { projectId: string }).projectId}`);
     } catch (e) {
@@ -80,6 +110,80 @@ export const NewWizard: React.FC = () => {
         <button className="btn sm" style={{ flex: 'none' }} onClick={() => setB(EXAMPLE)}>
           記入例を入れる
         </button>
+      </div>
+      <div className="panel" style={{ marginBottom: 16 }}>
+        <h3>
+          <Ic n={Link2} />
+          URL・資料から読み込む（任意）
+        </h3>
+        <div className="muted" style={{ marginBottom: 10, lineHeight: 1.7 }}>
+          商品のWebページや、サービス資料（PDF・PowerPoint・Word・画像など）を読み込むと、AIが下の入力欄を埋めます。内容を確認・修正してから台本を作れます。
+        </div>
+        <Field label="URL（1行に1つ）">
+          <Text value={urls} onChange={setUrls} multiline placeholder="https://example.com/service" />
+        </Field>
+        <Field label="資料ファイル" hint="PDF・PowerPoint（.pptx）・Word（.docx）・Excel（.xlsx）・テキスト・画像。最大10個">
+          <div className="row center" style={{ flexWrap: 'wrap', gap: 8 }}>
+            {docs.map((f, i) => (
+              <span key={`${f.name}-${i}`} className="chip on" style={{ flex: 'none' }}>
+                <Ic n={FileText} size={12} />
+                {f.name}
+                <button className="icon-btn" style={{ marginLeft: 4 }} onClick={() => setDocs((o) => o.filter((_, j) => j !== i))}>
+                  <Ic n={X} size={12} mr={0} />
+                </button>
+              </span>
+            ))}
+            <FilePick accept=".pdf,.pptx,.docx,.xlsx,.txt,.md,.csv,.html,.htm,image/*" onFile={(f) => setDocs((o) => [...o, f].slice(0, 10))}>
+              <Ic n={Plus} />
+              資料を追加
+            </FilePick>
+          </div>
+        </Field>
+        <Field label="補足（任意）" hint="例: 資料に複数の商品がある時は「〇〇について作って」、ターゲットを絞りたい時は「自治体向けに」など">
+          <Text value={hint} onChange={setHint} placeholder="例: トークングラフマーケターについて、観光・地域振興の担当者向けに" />
+        </Field>
+        <div className="row center">
+          <button
+            className="btn primary"
+            style={{ flex: 'none' }}
+            disabled={Boolean(reading) || (!urls.trim() && !docs.length)}
+            onClick={readSources}
+          >
+            <Ic n={Sparkles} />
+            読み込んで入力欄を埋める
+          </button>
+          {reading ? <span className="faint">{reading.message}</span> : null}
+        </div>
+        {reading ? <Progress value={reading.progress} /> : null}
+        {draft ? (
+          <div className="notice" style={{ marginTop: 12, lineHeight: 1.7 }}>
+            <b>読み込んだ資料</b>
+            {draft.sources.map((x) => (
+              <div key={x.label} className="faint">
+                ・{x.label}
+                {x.note ? `（${x.note}）` : x.chars ? `（${x.chars.toLocaleString()}文字）` : ''}
+              </div>
+            ))}
+            {colors ? (
+              <div className="row center tight" style={{ marginTop: 6 }}>
+                <span className="faint" style={{ flex: 'none' }}>ブランドカラー:</span>
+                {[colors.primary, colors.dark, colors.accent, colors.light].map((c) => (
+                  <span key={c} title={c} style={{ flex: 'none', width: 18, height: 18, borderRadius: 4, background: c, border: '1px solid var(--border)' }} />
+                ))}
+              </div>
+            ) : null}
+            {draft.cautions.length ? (
+              <>
+                <b style={{ display: 'block', marginTop: 8 }}>確認してほしい点</b>
+                {draft.cautions.map((c) => (
+                  <div key={c} className="faint">
+                    ・{c}
+                  </div>
+                ))}
+              </>
+            ) : null}
+          </div>
+        ) : null}
       </div>
       <div className="panel">
         <h3>1. 商品について</h3>

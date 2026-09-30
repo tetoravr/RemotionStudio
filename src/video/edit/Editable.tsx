@@ -3,7 +3,8 @@ import { AlignCenter, AlignLeft, AlignRight, Minus, Plus, RotateCcw, RotateCw, S
 import { createPortal } from 'react-dom';
 import type { ElementAdjust } from '../schema';
 import { useScene } from '../SceneContext';
-import { adjustTransform, isIdentity, layoutLabel, MAX_SCALE, MIN_SCALE, normalizeAdjust, readAdjust, type TextTarget } from './textEdit';
+import { useTheme } from '../theme';
+import { adjustTransform, isIdentity, layoutLabel, MAX_SCALE, MIN_SCALE, normalizeAdjust, readAdjust, sceneLayout, type TextTarget } from './textEdit';
 
 /**
  * 直接調整モード（エディターのプレビューだけで有効）。
@@ -24,6 +25,8 @@ export type EditMode = {
   /** adjust=null は調整の削除。silent=true は履歴を積まない（ドラッグ中） */
   commit: (sceneId: string, id: string, adjust: ElementAdjust | null, silent?: boolean) => void;
   commitText: (sceneId: string, target: TextTarget, value: string) => void;
+  /** セリフの設定を書き換える（吹き出しのしっぽなど）。silent=true は履歴を積まない（ドラッグ中） */
+  patchLine: (sceneId: string, lineId: string, patch: Record<string, unknown>, silent?: boolean) => void;
   pause: () => void;
   /** プレビュー領域（コンポジション左上）の画面座標 */
   getOrigin: () => { left: number; top: number };
@@ -62,12 +65,17 @@ export const Editable: React.FC<{
   /** layer の重なり順（元の要素の zIndex に合わせる） */
   z?: number;
   text?: { target: TextTarget; value: string };
+  /** 操作ボタンの列を出す位置（吹き出しは、しっぽの先端のハンドルと重ならない側に出す） */
+  barAt?: 'top' | 'bottom';
   children: React.ReactNode;
-}> = ({ id, mode = 'layer', z, text, children }) => {
+}> = ({ id, mode = 'layer', z, text, barAt = 'bottom', children }) => {
   const edit = useEditMode();
   const { timing } = useScene();
   const scene = timing.scene;
-  const adj = readAdjust(scene, id);
+  // 調整は画面の形（縦型・正方形・横型）ごとに別々に持つ
+  const { layout: themeLayout } = useTheme();
+  const format = themeLayout.format;
+  const adj = readAdjust(scene, id, format);
   const rootRef = useRef<HTMLDivElement>(null);
   const [box, setBox] = useState<Box | null>(null);
   const [draft, setDraft] = useState<string | null>(null);
@@ -119,7 +127,7 @@ export const Editable: React.FC<{
 
   /** このシーンで一番手前になる z（すでに一番手前ならそのまま） */
   const frontZ = () => {
-    const others = Object.entries(scene.layout ?? {})
+    const others = Object.entries(sceneLayout(scene, format))
       .filter(([k]) => k !== id)
       .map(([, a]) => a.z ?? -1);
     const top = Math.max(-1, ...others);
@@ -227,7 +235,8 @@ export const Editable: React.FC<{
     const UI = 30;
     const rot = { x: clamp(tc.x + Math.sin(th) * 38, UI / 2, ow - UI / 2), y: clamp(tc.y - Math.cos(th) * 38, UI / 2, oh - UI / 2) };
     const sc = { x: clamp(corners[2].x, UI / 2, ow - UI / 2), y: clamp(corners[2].y, UI / 2, oh - UI / 2) };
-    const bar = { x: clamp(bc.x, 140, Math.max(140, ow - 140)), y: clamp(bc.y + 14, 4, oh - 44) };
+    const topY = Math.min(...corners.map((c) => c.y));
+    const bar = { x: clamp(barAt === 'top' ? tc.x : bc.x, 140, Math.max(140, ow - 140)), y: barAt === 'top' ? clamp(topY - 96, 4, oh - 44) : clamp(bc.y + 14, 4, oh - 44) };
     const at = (p: { x: number; y: number }): React.CSSProperties => ({ left: p.x, top: p.y, transform: 'translate(-50%, -50%)' });
     return (
       <div data-edit-frame style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>

@@ -4,7 +4,7 @@ import { Player, type PlayerRef } from '@remotion/player';
 import React, { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { AdVideo } from '../../video/AdVideo';
 import { isAudioStale } from '../../video/narrationKey';
-import { applyTextTarget, type TextTarget } from '../../video/edit/textEdit';
+import { applyTextTarget, readAdjust, sceneLayout, setSceneLayout, type TextTarget } from '../../video/edit/textEdit';
 import { EditModeProvider, type EditMode } from '../../video/edit/Editable';
 import { FORMATS, Project, type ElementAdjust, type Scene, type SceneType } from '../../video/schema';
 import { newScene, remapCast, SCENE_TYPE_LABELS } from '../../video/templates';
@@ -175,14 +175,14 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
         if (sc && d) {
           e.preventDefault();
           editApi.current?.beginGesture();
-          const cur = sc.layout?.[id];
-          editApi.current?.commit(sc.id, id, { scale: 1, rotate: 0, ...cur, dx: (cur?.dx ?? 0) + d[0], dy: (cur?.dy ?? 0) + d[1] }, true);
+          const cur = readAdjust(sc, id, projectRef.current?.format ?? 'vertical');
+          editApi.current?.commit(sc.id, id, { ...cur, dx: cur.dx + d[0], dy: cur.dy + d[1] }, true);
           return;
         }
         if (sc && (e.key === 'Delete' || e.key === 'Backspace')) {
           e.preventDefault();
           editApi.current?.beginGesture();
-          editApi.current?.commit(sc.id, id, { dx: 0, dy: 0, scale: 1, rotate: 0, ...sc.layout?.[id], hidden: true }, true);
+          editApi.current?.commit(sc.id, id, { ...readAdjust(sc, id, projectRef.current?.format ?? 'vertical'), hidden: true }, true);
           setSelectedEl(null);
           return;
         }
@@ -281,10 +281,11 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
       update((p) => {
         const sc = p.scenes.find((x) => x.id === sceneId);
         if (!sc) return;
-        const layout = { ...(sc.layout ?? {}) };
+        // 今の画面の形（縦型・正方形・横型）の調整だけを書き換える
+        const layout = { ...sceneLayout(sc, p.format) };
         if (adjust) layout[id] = adjust;
         else delete layout[id];
-        sc.layout = Object.keys(layout).length ? layout : undefined;
+        setSceneLayout(sc, p.format, layout);
       }, { silent: silent ?? false }),
     commitText: (sceneId, target: TextTarget, value) =>
       update((p) => {
@@ -295,6 +296,11 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
         const sc = p.scenes.find((x) => x.id === sceneId);
         if (sc) applyTextTarget(sc, target, value);
       }),
+    patchLine: (sceneId, lineId, patch, silent) =>
+      update((p) => {
+        const line = p.scenes.find((x) => x.id === sceneId)?.lines.find((l) => l.id === lineId);
+        if (line) Object.assign(line, patch);
+      }, { silent: silent ?? false }),
     pause: () => playerRef.current?.pause(),
     getOrigin: () => {
       const r = boxRef.current?.getBoundingClientRect();
@@ -456,13 +462,15 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
                             l.id = next;
                           });
                           // 位置調整はセリフIDで保存しているので、新しいIDに付け替える
-                          if (c.layout) {
-                            c.layout = Object.fromEntries(
-                              Object.entries(c.layout).map(([k, v]) => {
-                                const m = /^(line|caption):(.+)$/.exec(k);
-                                return [m && ids.has(m[2]) ? `${m[1]}:${ids.get(m[2])}` : k, v];
-                              }),
-                            );
+                          if (c.layouts) {
+                            for (const f of Object.keys(c.layouts) as (keyof typeof c.layouts)[]) {
+                              c.layouts[f] = Object.fromEntries(
+                                Object.entries(c.layouts[f] ?? {}).map(([k, v]) => {
+                                  const m = /^(line|caption):(.+)$/.exec(k);
+                                  return [m && ids.has(m[2]) ? `${m[1]}:${ids.get(m[2])}` : k, v];
+                                }),
+                              );
+                            }
                           }
                           p.scenes.splice(i + 1, 0, c);
                         })

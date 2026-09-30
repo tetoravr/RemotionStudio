@@ -56,8 +56,14 @@ export const sceneKeys = (st: SceneTiming, project: Project): SceneKeys => {
   if (s.type === 'feature') {
     const eb = findLineFor(st, s.eyebrow);
     if (eb) eyebrowAt = Math.max(enterOffset, eb.start + on - 1);
-    const hl = findLineFor(st, s.headline, eb ? eb.start : -1);
-    if (hl) headAt = Math.max(eyebrowAt + 6, hl.start + on);
+    // 1行目と見出しを続けて1つのセリフで読む場合は、文中で見出しの言葉が出てくる位置に合わせて叩きつける
+    const both = eb && norm(eb.line.text).includes(norm(s.headline)) && norm(eb.line.text).includes(norm(s.eyebrow)) ? eb : undefined;
+    const hl = both ? undefined : findLineFor(st, s.headline, eb ? eb.start : -1);
+    if (both) {
+      const t = norm(both.line.text);
+      const ratio = Math.min(0.9, t.lastIndexOf(norm(s.headline)) / Math.max(1, t.length));
+      headAt = Math.max(eyebrowAt + 6, Math.round(both.start + on + (both.end - both.start - on) * ratio));
+    } else if (hl) headAt = Math.max(eyebrowAt + 6, hl.start + on);
     else headAt = eb ? Math.max(eyebrowAt + 8, Math.round(eb.end - 2)) : eyebrowAt + 12;
   }
   if (s.type === 'talk' && s.prop?.image) {

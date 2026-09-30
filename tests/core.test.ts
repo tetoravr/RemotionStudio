@@ -8,7 +8,7 @@ import { LIBRARY_CHARACTERS, libraryCastMember } from '../src/video/library';
 import { parseRich, fitFontSize } from '../src/video/components/RichText';
 import { adaptForFormat } from '../src/video/adapt';
 import { collectSfx } from '../src/video/events';
-import { applyTextTarget, normalizeAdjust, sceneElementIds } from '../src/video/edit/textEdit';
+import { applyTextTarget, migrateLayouts, normalizeAdjust, readAdjust, sceneElementIds, sceneLayout, setSceneLayout } from '../src/video/edit/textEdit';
 import { irodoriCaption, isAudioStale, narrationHash, voiceFor } from '../src/video/narrationKey';
 import { Project } from '../src/video/schema';
 import { blankProject, DEFAULT_CAST } from '../src/video/templates';
@@ -245,8 +245,8 @@ test('直接調整: 文字の書き換えは元データに戻り、調整はス
   assert.equal(line.speak, undefined);
   applyTextTarget(talk, { type: 'field', field: 'headline' }, '新見出し');
   assert.equal((talk as { headline?: string }).headline, '新見出し');
-  talk.layout = { headline: { dx: 10, dy: 0, scale: 1.2, rotate: 5 } };
-  assert.equal(Project.parse(p).scenes.find((s) => s.id === talk.id)!.layout!.headline.rotate, 5);
+  talk.layouts = { vertical: { headline: { dx: 10, dy: 0, scale: 1.2, rotate: 5 } } };
+  assert.equal(Project.parse(p).scenes.find((s) => s.id === talk.id)!.layouts!.vertical!.headline.rotate, 5);
   assert.ok(sceneElementIds(talk).includes(`line:${line.id}`));
 });
 
@@ -282,4 +282,104 @@ test('直接調整: 重なり順（z）だけの記録も保存され、調整�
   const a = normalizeAdjust({ dx: 0, dy: 0, scale: 1, rotate: 0, z: 3 });
   assert.equal(a?.z, 3);
   assert.equal(a?.hidden, undefined);
+});
+
+test('資料の読み込み: HTMLから本文を取り出し、Office文書(ZIP)の文字を読める', async () => {
+  const { htmlToText, officeToText } = await import('../server/ai/sources');
+  const page = htmlToText('<html><head><title>商品A｜公式</title><meta name="description" content="説明文"><style>.x{}</style></head><body><nav>メニュー</nav><h1>見出し</h1><p>本文&amp;テキスト</p><script>alert(1)</script></body></html>');
+  assert.equal(page.title, '商品A｜公式');
+  assert.equal(page.description, '説明文');
+  assert.ok(page.text.includes('見出し') && page.text.includes('本文&テキスト') && !page.text.includes('alert'));
+  // 最小の PPTX（スライド1枚）を組み立てて読む
+  const zlib = await import('node:zlib');
+  const entry = (name: string, body: string) => {
+    const data = zlib.deflateRawSync(Buffer.from(body));
+    return { name: Buffer.from(name), data, raw: Buffer.from(body) };
+  };
+  const files = [entry('ppt/slides/slide1.xml', '<p:sld><a:p><a:r><a:t>課題はデータ分断</a:t></a:r></a:p><a:p><a:t>解決します</a:t></a:p></p:sld>')];
+  const parts: Buffer[] = [];
+  const central: Buffer[] = [];
+  let offset = 0;
+  for (const f of files) {
+    const lh = Buffer.alloc(30);
+    lh.writeUInt32LE(0x04034b50, 0);
+    lh.writeUInt16LE(8, 8);
+    lh.writeUInt32LE(f.data.length, 18);
+    lh.writeUInt32LE(f.raw.length, 22);
+    lh.writeUInt16LE(f.name.length, 26);
+    parts.push(lh, f.name, f.data);
+    const ch = Buffer.alloc(46);
+    ch.writeUInt32LE(0x02014b50, 0);
+    ch.writeUInt16LE(8, 10);
+    ch.writeUInt32LE(f.data.length, 20);
+    ch.writeUInt32LE(f.raw.length, 24);
+    ch.writeUInt16LE(f.name.length, 28);
+    ch.writeUInt32LE(offset, 42);
+    central.push(ch, f.name);
+    offset += 30 + f.name.length + f.data.length;
+  }
+  const cd = Buffer.concat(central);
+  const eocd = Buffer.alloc(22);
+  eocd.writeUInt32LE(0x06054b50, 0);
+  eocd.writeUInt16LE(files.length, 8);
+  eocd.writeUInt16LE(files.length, 10);
+  eocd.writeUInt32LE(cd.length, 12);
+  eocd.writeUInt32LE(offset, 16);
+  const text = officeToText('deck.pptx', Buffer.concat([...parts, cd, eocd]));
+  assert.ok(text.includes('スライド1') && text.includes('課題はデータ分断') && text.includes('解決します'));
+});
+
+test('直接調整: 画面の形ごとに調整を別々に持ち、旧形式は今の形へ移す', () => {
+  const p = Project.parse(structuredClone(sample));
+  const sc = p.scenes[0];
+  setSceneLayout(sc, 'vertical', { logo: { dx: 50, dy: 0, scale: 1, rotate: 0 } });
+  setSceneLayout(sc, 'horizontal', { logo: { dx: -80, dy: 20, scale: 1.5, rotate: 0 } });
+  assert.equal(readAdjust(sc, 'logo', 'vertical').dx, 50);
+  assert.equal(readAdjust(sc, 'logo', 'horizontal').scale, 1.5);
+  assert.equal(readAdjust(sc, 'logo', 'square').dx, 0); // 正方形は未調整のまま
+  setSceneLayout(sc, 'horizontal', {});
+  assert.deepEqual(Object.keys(sc.layouts ?? {}), ['vertical']);
+  // 旧形式（layout と セリフの tail）
+  const q = Project.parse({ ...structuredClone(sample), format: 'square' });
+  const t = q.scenes.find((s) => s.lines.length)!;
+  t.layout = { headline: { dx: 5, dy: 5, scale: 1, rotate: 0 } };
+  t.lines[0].tail = { dx: -100, dy: 0 };
+  migrateLayouts(q);
+  assert.equal(t.layout, undefined);
+  assert.equal(t.lines[0].tail, undefined);
+  assert.equal(sceneLayout(t, 'square').headline.dx, 5);
+  assert.equal(readAdjust(t, `line:${t.lines[0].id}`, 'square').tail?.dx, -100);
+  assert.equal(readAdjust(t, 'headline', 'vertical').dx, 0);
+});
+
+test('URL読み込み: 社内・ローカルのアドレスを見分ける（公開時のSSRF対策）', async () => {
+  const { isPrivateAddress } = await import('../server/ai/sources');
+  for (const ip of ['127.0.0.1', '10.1.2.3', '172.16.0.1', '172.31.255.255', '192.168.1.10', '169.254.169.254', '100.64.0.1', '0.0.0.0', '::1', 'fd00::1', 'fe80::1', '::ffff:10.0.0.1'])
+    assert.ok(isPrivateAddress(ip), ip);
+  for (const ip of ['8.8.8.8', '172.32.0.1', '203.0.113.5', '2606:4700::1111']) assert.ok(!isPrivateAddress(ip), ip);
+});
+
+test('音色補正: 補正なしなら元のまま、高音域を上げると高音だけが強くなる', async () => {
+  const { applyEq, bandProfile } = await import('../server/ai/voiceEq');
+  const rate = 48000;
+  // 500Hz と 9kHz を混ぜた音
+  const x = Float32Array.from({ length: rate }, (_, i) => 0.3 * Math.sin((2 * Math.PI * 500 * i) / rate) + 0.1 * Math.sin((2 * Math.PI * 9000 * i) / rate));
+  const same = applyEq(x, rate, new Array(10).fill(0));
+  assert.equal(same, x);
+  const flat = applyEq(x, rate, [0, 0, 0, 0, 0, 0, 0.6, 0, 0, 0]); // ほぼ0でも処理は通る
+  let diff = 0;
+  for (let i = 2000; i < rate - 2000; i++) diff = Math.max(diff, Math.abs(flat[i] - x[i]));
+  assert.ok(diff < 0.05, `near-identity ${diff}`);
+  const boosted = applyEq(x, rate, [0, 0, 0, 0, 0, 0, 6, 6, 6, 6]);
+  const low = (y: Float32Array, f: number) => {
+    let c = 0;
+    let s = 0;
+    for (let i = 0; i < y.length; i++) (c += y[i] * Math.cos((2 * Math.PI * f * i) / rate)), (s += y[i] * Math.sin((2 * Math.PI * f * i) / rate));
+    return Math.hypot(c, s);
+  };
+  const r500 = low(boosted, 500) / low(x, 500);
+  const r9k = low(boosted, 9000) / low(x, 9000);
+  assert.ok(Math.abs(r500 - 1) < 0.08, `500Hz unchanged ${r500}`);
+  assert.ok(r9k > 1.7 && r9k < 2.3, `9kHz boosted ~+6dB ${r9k}`);
+  assert.equal(bandProfile(new Float32Array(10), rate).length, 10);
 });

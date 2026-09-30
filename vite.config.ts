@@ -8,7 +8,7 @@ export default defineConfig({
   publicDir: 'public',
   server: {
     port: 5173,
-    proxy: { '/api': api, '/files': api },
+    proxy: { '/api': api, '/files': api, '/auth': api },
     watch: {
       ignored: ['**/SUSHI UI/**', '**/projects/**', '**/voices/**', '**/node_modules/**'],
     },

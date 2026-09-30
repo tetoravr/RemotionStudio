@@ -1,37 +1,39 @@
 import React from 'react';
-import { elementExists, layoutLabel, sceneElementIds } from '../../video/edit/textEdit';
-import type { Project } from '../../video/schema';
+import { elementExists, layoutLabel, sceneElementIds, sceneLayout, setSceneLayout } from '../../video/edit/textEdit';
+import { FORMATS, type ElementAdjust, type Project } from '../../video/schema';
 import type { Update } from '../pages/Editor';
 import { Puzzle } from 'lucide-react';
 import { Ic } from '../icons';
 
 /**
  * 直接調整した要素の一覧。プレビューに出ていない時間帯の要素の非表示・復元や、調整のリセットに使う。
- * 調整はプレビュー上（「直接調整」）で行う。
+ * 調整はプレビュー上（「直接調整」）で行う。調整は画面の形（縦型・正方形・横型）ごとに別々。
  */
 export const ElementList: React.FC<{ project: Project; index: number; update: Update; onSelect?: (id: string) => void }> = ({ project, index, update, onSelect }) => {
   const scene = project.scenes[index];
   const ids = sceneElementIds(scene).filter((id) => elementExists(scene, id));
   // 重なり順（z）だけの記録は「調整」として数えない
-  const adjusted = Object.values(scene.layout ?? {}).filter((a) => a.hidden || a.align || a.dx || a.dy || (a.scale ?? 1) !== 1 || a.rotate).length;
-  const set = (id: string, fn: (cur: NonNullable<typeof scene.layout>[string] | undefined) => NonNullable<typeof scene.layout>[string] | null) =>
+  const current = sceneLayout(scene, project.format);
+  const adjusted = Object.values(current).filter((a) => a.hidden || a.align || a.dx || a.dy || (a.scale ?? 1) !== 1 || a.rotate || a.tail).length;
+  const set = (id: string, fn: (cur: ElementAdjust | undefined) => ElementAdjust | null) =>
     update((p) => {
       const sc = p.scenes[index];
-      const layout = { ...(sc.layout ?? {}) };
+      const layout = { ...sceneLayout(sc, p.format) };
       const next = fn(layout[id]);
       if (next) layout[id] = next;
       else delete layout[id];
-      sc.layout = Object.keys(layout).length ? layout : undefined;
+      setSceneLayout(sc, p.format, layout);
     });
 
   return (
     <details className="section" style={{ marginBottom: 10 }}>
       <summary className="section-title" style={{ cursor: 'pointer' }}>
         <Ic n={Puzzle} />要素の表示・調整{adjusted ? <span className="count">{adjusted}</span> : null}
+        <span className="faint">（{FORMATS[project.format].label.split('（')[0]}）</span>
         <span className="faint">プレビュー上の「直接調整」で動かせます</span>
       </summary>
       {ids.map((id) => {
-        const a = scene.layout?.[id];
+        const a = current[id];
         const moved = a && (a.dx || a.dy || (a.scale ?? 1) !== 1 || a.rotate);
         return (
           <div key={id} className="row center tight" style={{ marginBottom: 4 }}>
@@ -57,8 +59,8 @@ export const ElementList: React.FC<{ project: Project; index: number; update: Up
         );
       })}
       {adjusted ? (
-        <button className="btn sm ghost" style={{ marginTop: 6 }} onClick={() => update((p) => void (p.scenes[index].layout = undefined))}>
-          このシーンの調整をすべてリセット
+        <button className="btn sm ghost" style={{ marginTop: 6 }} onClick={() => update((p) => setSceneLayout(p.scenes[index], p.format, {}))}>
+          この画面の形の調整をすべてリセット
         </button>
       ) : null}
     </details>

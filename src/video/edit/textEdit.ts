@@ -1,4 +1,4 @@
-import type { ElementAdjust, Scene } from '../schema';
+import type { ElementAdjust, FormatId, Project, Scene } from '../schema';
 
 /** 画面上の文字を、どのデータに書き戻すか */
 export type TextTarget =
@@ -11,9 +11,48 @@ export type TextTarget =
 export const MIN_SCALE = 0.1;
 export const MAX_SCALE = 6;
 
-export const readAdjust = (scene: { layout?: Record<string, ElementAdjust> }, id: string): ElementAdjust => {
-  const a = scene.layout?.[id];
-  return { dx: a?.dx ?? 0, dy: a?.dy ?? 0, scale: a?.scale ?? 1, rotate: a?.rotate ?? 0, px: a?.px, py: a?.py, hidden: a?.hidden, align: a?.align, z: a?.z };
+type WithLayouts = Pick<Scene, 'layouts' | 'layout'>;
+
+/** その画面の形での、シーンの要素の調整（要素ID -> 調整） */
+export const sceneLayout = (scene: WithLayouts, format: FormatId): Record<string, ElementAdjust> => scene.layouts?.[format] ?? {};
+
+/** その画面の形の調整を書き換える（空になったらキーごと消す） */
+export const setSceneLayout = (scene: WithLayouts, format: FormatId, map: Record<string, ElementAdjust>) => {
+  const layouts = { ...(scene.layouts ?? {}) };
+  if (Object.keys(map).length) layouts[format] = map;
+  else delete layouts[format];
+  scene.layouts = Object.keys(layouts).length ? layouts : undefined;
+};
+
+export const readAdjust = (scene: WithLayouts, id: string, format: FormatId): ElementAdjust => {
+  const a = sceneLayout(scene, format)[id];
+  return { dx: a?.dx ?? 0, dy: a?.dy ?? 0, scale: a?.scale ?? 1, rotate: a?.rotate ?? 0, px: a?.px, py: a?.py, hidden: a?.hidden, align: a?.align, z: a?.z, tail: a?.tail };
+};
+
+/**
+ * 旧形式（画面の形を区別しない layout と、セリフの tail）を、今の画面の形の layouts へ移す。
+ * 旧形式の調整は、その時の画面の形で作ったものとみなす。
+ */
+export const migrateLayouts = <T extends Pick<Project, 'format' | 'scenes'>>(project: T): T => {
+  for (const s of project.scenes) {
+    const map: Record<string, ElementAdjust> = { ...(s.layouts?.[project.format] ?? {}) };
+    let moved = false;
+    if (s.layout) {
+      for (const [k, v] of Object.entries(s.layout)) map[k] = { ...v, ...map[k] };
+      s.layout = undefined;
+      moved = true;
+    }
+    for (const l of s.lines) {
+      if (!l.tail) continue;
+      const key = `line:${l.id}`;
+      const cur = map[key];
+      map[key] = { dx: cur?.dx ?? 0, dy: cur?.dy ?? 0, scale: cur?.scale ?? 1, rotate: cur?.rotate ?? 0, ...(cur ? { px: cur.px, py: cur.py, hidden: cur.hidden, align: cur.align, z: cur.z } : {}), tail: cur?.tail ?? l.tail };
+      l.tail = undefined;
+      moved = true;
+    }
+    if (moved) setSceneLayout(s, project.format, map);
+  }
+  return project;
 };
 
 export const isIdentity = (a: ElementAdjust) => Math.abs(a.dx) < 0.5 && Math.abs(a.dy) < 0.5 && Math.abs(a.scale - 1) < 0.005 && Math.abs(a.rotate) < 0.05;
@@ -30,8 +69,9 @@ export const normalizeAdjust = (a: ElementAdjust): ElementAdjust | null => {
     hidden: a.hidden || undefined,
     align: a.align,
     z: a.z,
+    tail: a.tail && (a.tail.dx || a.tail.dy || a.tail.hidden) ? { dx: Math.round(a.tail.dx), dy: Math.round(a.tail.dy), hidden: a.tail.hidden || undefined } : undefined,
   };
-  if (!out.hidden && !out.align && out.z == null && isIdentity(out)) return null;
+  if (!out.hidden && !out.align && out.z == null && !out.tail && isIdentity(out)) return null;
   return out;
 };
 

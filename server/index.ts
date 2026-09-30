@@ -9,8 +9,9 @@ import { LIBRARY_CHARACTERS } from '../src/video/library';
 import { STYLE_PRESETS } from './ai/images';
 import { attachScreenshots, generateStoryboard, reviseStoryboard, type Brief, type ScreenshotRef } from './ai/storyboard';
 import { resolveMedia } from './ai/media';
+import { draftBrief } from './ai/sources';
 import { loadUiLibrary } from './ai/uiLibrary';
-import { candidateFile, createCandidate, deleteVoice, registerVoice } from './ai/voices';
+import { candidateFile, createCandidate, deleteVoice, localVoiceFile, localVoices, registerVoice } from './ai/voices';
 import { engineId, irodoriStatus, OPENAI_VOICES, resolveProvider, synthesizeToFile } from './ai/tts';
 import { generateCharacter, type CharacterRequest } from './characters';
 import { config, hasOpenAI, ROOT } from './env';
@@ -19,9 +20,22 @@ import { generateNarration, staleLines } from './narration';
 import {
   deleteProject, duplicateProject, emptyTrash, listProjects, loadProject, newProjectId, projectDir, saveAsset, saveProject, seedSamples,
 } from './projects';
-import { renderProject } from './render';
+import { renderProject, withFileServer } from './render';
+import { authEnabled, authProblems, authRouter, currentUser, requireLogin } from './auth';
 
 const app = express();
+// リバースプロキシ（Cloudflare Tunnel・ロードバランサ等）の内側で動かす時に、https やクライアントIPを正しく扱う
+app.set('trust proxy', 1);
+app.disable('x-powered-by');
+app.use((_req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Referrer-Policy', 'same-origin');
+  next();
+});
+app.get('/healthz', (_req, res) => res.json({ ok: true }));
+app.use(authRouter());
+// ここから下は、ログインが必要（Google ログインを設定した時だけ有効）
+app.use(requireLogin);
 app.use(express.json({ limit: '10mb' }));
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 60 * 1024 * 1024 } });
 
@@ -75,7 +89,9 @@ app.put(
       res.status(400).json({ error: 'プロジェクトの形式が正しくありません', issues: parsed.error.issues.slice(0, 5) });
       return;
     }
-    res.json(await saveProject(parsed.data));
+    // 誰が最後に編集したか（ログイン時のみ）
+    const user = currentUser(req);
+    res.json(await saveProject({ ...parsed.data, updatedBy: user?.email ?? parsed.data.updatedBy }));
   }),
 );
 
@@ -208,6 +224,28 @@ app.post(
       await saveProject(project);
       return { projectId: project.id };
     });
+    res.json({ jobId: job.id });
+  }),
+);
+
+/** URL・資料から、ブリーフ（商品情報）の下書きを作る。ウィザードの入力欄を埋めるのに使う */
+app.post(
+  '/api/ai/brief-from-sources',
+  upload.array('files', 10),
+  h(async (req, res) => {
+    const urls = String(req.body?.urls ?? '')
+      .split(/[\s,]+/)
+      .map((s) => s.trim())
+      .filter((s) => /^https?:\/\//i.test(s));
+    const files = ((req.files as Express.Multer.File[] | undefined) ?? []).map((f) => ({
+      name: Buffer.from(f.originalname, 'latin1').toString('utf8'),
+      data: f.buffer,
+    }));
+    if (!urls.length && !files.length) {
+      res.status(400).json({ error: 'URLか資料ファイルを指定してください' });
+      return;
+    }
+    const job = startJob('brief', undefined, (ctx) => draftBrief({ urls, files, hint: String(req.body?.hint ?? '') }, (p, m) => ctx.progress(p, m)));
     res.json({ jobId: job.id });
   }),
 );
@@ -452,6 +490,27 @@ app.post(
   }),
 );
 
+/** 参照音声のファイル（?download=1 で保存用）。標準の声・このアプリで作った声・取り込んだ声が対象 */
+app.get(
+  '/api/tts/voices/:id/file',
+  h(async (req, res) => {
+    const id = param(req, 'id');
+    if (!/^[A-Za-z0-9_-]+$/.test(id)) {
+      res.status(400).json({ error: 'invalid voice id' });
+      return;
+    }
+    const file = await localVoiceFile(id);
+    if (!file) {
+      res.status(404).json({ error: 'この声のファイルはこのアプリにありません（Irodori サーバーに直接置かれた声です）' });
+      return;
+    }
+    const label = (await localVoices()).find((v) => v.id === id)?.label ?? id;
+    const name = `${label.replace(/[\\/:*?"<>|]/g, '_')}${path.extname(file)}`;
+    res.setHeader('Content-Disposition', `${req.query.download ? 'attachment' : 'inline'}; filename="${id}${path.extname(file)}"; filename*=UTF-8''${encodeURIComponent(name)}`);
+    res.sendFile(file);
+  }),
+);
+
 app.delete(
   '/api/tts/voices/:id',
   h(async (req, res) => {
@@ -478,7 +537,7 @@ app.post(
     }
     const job = startJob('render', id, async (ctx) => {
       const project = await loadProject(id);
-      return renderProject({ project, serverUrl: `http://127.0.0.1:${config.port}`, onProgress: (p, m) => ctx.progress(p, m) });
+      return withFileServer((serverUrl) => renderProject({ project, serverUrl, onProgress: (p, m) => ctx.progress(p, m) }));
     });
     res.json({ jobId: job.id });
   }),
@@ -507,10 +566,19 @@ app.use((err: Error & { status?: number }, _req: Request, res: Response, _next: 
   res.status(err.status ?? 500).json({ error: err.message });
 });
 
+// 外部から接続できる設定なのにログインが無い状態では起動しない（社外に丸見えになるのを防ぐ）
+const loopback = ['127.0.0.1', 'localhost', '::1'].includes(config.host);
+if (!loopback && !authEnabled() && process.env.ALLOW_PUBLIC_WITHOUT_AUTH !== 'true') {
+  console.error(`\n  ✖ HOST=${config.host} で外部に公開する時は、Google ログインの設定が必要です。未設定: ${authProblems().join(', ')}\n    （docs/deploy.md を参照。どうしてもログインなしで LAN に出す時だけ ALLOW_PUBLIC_WITHOUT_AUTH=true）\n`);
+  process.exit(1);
+}
+if (authEnabled() && authProblems().length) console.warn(`  ⚠ ログイン設定の不足: ${authProblems().join(', ')}`);
+
 await seedSamples();
 await emptyTrash();
 app.listen(config.port, config.host, async () => {
   console.log(`\n  Ad Studio server: http://localhost:${config.port}`);
+  console.log(`  ログイン: ${authEnabled() ? `Google（${[...(process.env.AUTH_ALLOWED_DOMAINS ?? '').split(','), ...(process.env.AUTH_ALLOWED_EMAILS ?? '').split(',')].filter(Boolean).join(', ')}）` : 'なし（このPCだけで使う設定）'}`);
   console.log(`  OpenAI: ${hasOpenAI() ? `有効 (${config.models.text} / ${config.models.tts} / ${config.models.image})` : '未設定（.env に OPENAI_API_KEY を設定すると AI 機能が使えます）'}`);
   const provider = resolveProvider('auto');
   const irodori = await irodoriStatus();

@@ -6,6 +6,31 @@ import { go, MetaContext } from '../App';
 import { Sparkles } from 'lucide-react';
 import { Ic } from '../icons';
 
+/** ログイン中のユーザーとログアウト（Google ログインを設定した時だけ表示） */
+const UserBar: React.FC = () => {
+  const [me, setMe] = useState<{ email: string; name: string; picture?: string } | null>(null);
+  useEffect(() => {
+    api.me().then((r) => setMe(r.user)).catch(() => setMe(null));
+  }, []);
+  if (!me) return null;
+  return (
+    <div className="row center tight" style={{ justifyContent: 'flex-end', marginBottom: 10 }}>
+      {me.picture ? <img src={me.picture} alt="" referrerPolicy="no-referrer" style={{ width: 24, height: 24, borderRadius: '50%', flex: 'none' }} /> : null}
+      <span className="faint" style={{ flex: 'none' }}>{me.name}（{me.email}）</span>
+      <button
+        className="btn sm ghost"
+        style={{ flex: 'none' }}
+        onClick={async () => {
+          await api.logout();
+          window.location.href = '/auth/login';
+        }}
+      >
+        ログアウト
+      </button>
+    </div>
+  );
+};
+
 export const Home: React.FC = () => {
   const meta = useContext(MetaContext)!;
   const [list, setList] = useState<ProjectSummary[] | null>(null);
@@ -28,6 +53,7 @@ export const Home: React.FC = () => {
 
   return (
     <div className="home">
+      <UserBar />
       <div className="hero-banner">
         <div style={{ flex: 1 }}>
           <div className="pill" style={{ marginBottom: 12 }}>Remotion × OpenAI</div>
@@ -75,7 +101,10 @@ export const Home: React.FC = () => {
                 <span className="pill">{FORMATS[p.format].label.split('（')[0]}</span>
                 <span className="pill">{p.scenes}シーン</span>
               </div>
-              <div className="faint">{p.updatedAt ? new Date(p.updatedAt).toLocaleString('ja-JP') : ''}</div>
+              <div className="faint">
+                {p.updatedAt ? new Date(p.updatedAt).toLocaleString('ja-JP') : ''}
+                {p.updatedBy ? ` ・ ${p.updatedBy.split('@')[0]}` : ''}
+              </div>
             </div>
             <div className="actions" onClick={(e) => e.stopPropagation()}>
               <button

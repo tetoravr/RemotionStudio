@@ -30,6 +30,7 @@ export type ProjectSummary = {
   primary: string;
   scenes: number;
   updatedAt?: string;
+  updatedBy?: string;
   thumbnail?: string;
 };
 
@@ -44,12 +45,19 @@ export type Job = {
 };
 
 const json = async <T,>(res: Response): Promise<T> => {
+  // ログインが切れていたら、ログイン画面へ（戻り先に今の画面を付ける）
+  if (res.status === 401) {
+    window.location.href = `/auth/login?next=${encodeURIComponent(window.location.pathname + window.location.hash)}`;
+    throw new Error('ログインしてください');
+  }
   const body = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error((body as { error?: string }).error || `HTTP ${res.status}`);
   return body as T;
 };
 
 export const api = {
+  me: () => fetch('/auth/me').then((r) => json<{ enabled: boolean; user: { email: string; name: string; picture?: string } | null }>(r)),
+  logout: () => fetch('/auth/logout', { method: 'POST' }).then((r) => json<{ ok: boolean }>(r)),
   meta: () => fetch('/api/meta').then((r) => json<Meta>(r)),
   list: () => fetch('/api/projects').then((r) => json<ProjectSummary[]>(r)),
   get: (id: string) => fetch(`/api/projects/${id}`).then((r) => json<Project>(r)),
@@ -74,6 +82,14 @@ export const api = {
   post: (url: string, body: unknown = {}) =>
     fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then((r) => json<{ jobId: string }>(r)),
   job: (id: string) => fetch(`/api/jobs/${id}`).then((r) => json<Job>(r)),
+  /** URL・資料からブリーフの下書きを作るジョブを始める */
+  briefFromSources: (urls: string[], files: File[], hint: string) => {
+    const fd = new FormData();
+    fd.append('urls', urls.join('\n'));
+    fd.append('hint', hint);
+    for (const f of files) fd.append('files', f);
+    return fetch('/api/ai/brief-from-sources', { method: 'POST', body: fd }).then((r) => json<{ jobId: string }>(r));
+  },
   voiceCandidate: (body: { caption: string; text: string; seed?: number }) =>
     fetch('/api/tts/voice-candidates', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then((r) =>
       json<{ id: string; seed: number; durationSec: number; url: string }>(r),
