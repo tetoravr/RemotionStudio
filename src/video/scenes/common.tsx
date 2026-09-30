@@ -29,11 +29,11 @@ export const SceneCharacters: React.FC = () => {
 };
 
 /** 話者の頭上に吹き出し。話者がいないセリフは画面中央付近に出す */
-/** 直接調整中は、レイアウトを決めやすいように、時間で出入りする要素も全部出したままにする */
+/** 要素を選んで調整している間は、レイアウトを決めやすいように、時間で出入りする要素も全部出したままにする */
 export const useShowAll = () => {
   const edit = useEditMode();
   const { timing } = useScene();
-  return Boolean(edit?.enabled && edit.activeSceneId === timing.scene.id);
+  return Boolean(edit?.enabled && edit.activeSceneId === timing.scene.id && edit.selectedId);
 };
 
 export const SceneBubbles: React.FC<{ fallbackY?: number; minTipY?: number }> = ({ fallbackY, minTipY }) => {

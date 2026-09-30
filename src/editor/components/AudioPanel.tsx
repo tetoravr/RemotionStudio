@@ -1,12 +1,12 @@
+import { Music } from 'lucide-react';
 import React, { useContext } from 'react';
 import type { Project } from '../../video/schema';
 import { api, ttsFor } from '../api';
 import { MetaContext } from '../App';
-import type { RunJob, Update } from '../pages/Editor';
-import { Field, FilePick, Num, Slider, Toggle } from './Fields';
-import { NarrationList } from './NarrationList';
-import { CircleCheck, Music } from 'lucide-react';
 import { Ic } from '../icons';
+import type { RunJob, Update } from '../pages/Editor';
+import { Cell, Disclosure, FilePick, Num, Section, Seg, Slider, Toggle } from './Fields';
+import { NarrationList } from './NarrationList';
 
 export const AudioPanel: React.FC<{ project: Project; update: Update; runJob: RunJob; onSelectScene?: (i: number) => void }> = ({ project, update, runJob, onSelectScene }) => {
   const a = project.audio;
@@ -14,88 +14,107 @@ export const AudioPanel: React.FC<{ project: Project; update: Update; runJob: Ru
   const tts = ttsFor(meta, a.ttsProvider);
   const ir = meta.tts.irodori;
   const bgmMode = a.bgm === 'none' ? 'none' : a.bgm ? 'custom' : 'default';
+  const uploadBgm = async (f: File) => {
+    const { path } = await api.upload(project.id, f);
+    update((p) => void (p.audio.bgm = path));
+  };
   return (
     <div>
-      <div className="section">
-        <div className="section-title">BGM</div>
-        <div className="chips" style={{ marginBottom: 10 }}>
-          <button className={`chip ${bgmMode === 'default' ? 'on' : ''}`} onClick={() => update((p) => void (p.audio.bgm = undefined))}>
-            組み込み（150BPM ポップ）
-          </button>
-          <button className={`chip ${bgmMode === 'none' ? 'on' : ''}`} onClick={() => update((p) => void (p.audio.bgm = 'none'))}>
-            なし
-          </button>
-          <FilePick
-            accept="audio/*"
-            className={`chip ${bgmMode === 'custom' ? 'on' : ''}`}
-            onFile={async (f) => {
-              const { path } = await api.upload(project.id, f);
-              update((p) => void (p.audio.bgm = path));
-            }}
+      <Section title="ナレーション">
+        <div className="group">
+          <Cell label="セリフを声で読み上げる">
+            <Toggle checked={a.narration} onChange={(v) => update((p) => void (p.audio.narration = v))} />
+          </Cell>
+          <Cell
+            label="音声エンジン"
+            sub={
+              tts.provider === 'irodori'
+                ? ir.online
+                  ? `Irodori-TTS${ir.device === 'cpu' ? ' ・ GPUなし（1セリフ30〜60秒）' : ''}`
+                  : 'Irodori-TTS ・ npm run irodori で起動してください'
+                : 'OpenAI TTS'
+            }
           >
-            {bgmMode === 'custom' ? (
-              <>
-                <Ic n={Music} />
-                {a.bgm!.split('/').pop()}
-              </>
-            ) : (
-              'ファイルをアップロード'
-            )}
-          </FilePick>
+            <span className={`badge ${tts.ready ? 'ok' : 'danger'}`}>
+              <span className={`dot ${tts.ready ? 'ok' : 'danger'}`} />
+              {tts.ready ? '接続中' : '未接続'}
+            </span>
+          </Cell>
+          <Cell label="音量" stack>
+            <Slider value={a.narrationVolume} min={0} max={1} disabled={!a.narration} onChange={(v) => update((p) => void (p.audio.narrationVolume = v))} />
+          </Cell>
+          <Cell label="字幕を常に表示" sub="音を出さずに見る人のために、すべてのセリフを字幕でも出します">
+            <Toggle checked={project.subtitles} onChange={(v) => update((p) => void (p.subtitles = v))} />
+          </Cell>
         </div>
-        <Field label="BGM音量（セリフ中は自動で下がります）">
-          <Slider value={a.bgmVolume} min={0} max={1} onChange={(v) => update((p) => void (p.audio.bgmVolume = v))} />
-        </Field>
-        <Field label="BPM（シーンの切り替えをビートに合わせる / 0で無効）" hint="アップロードしたBGMを使う場合はその曲のBPMを入れてください">
-          <Num value={a.bpm} min={0} max={240} onChange={(v) => update((p) => void (p.audio.bpm = v))} />
-        </Field>
-      </div>
-      <div className="section">
-        <div className="section-title">効果音</div>
-        <Toggle checked={a.sfx} onChange={(v) => update((p) => void (p.audio.sfx = v))} label="自動で効果音を付ける（ポップ・ワイプ・インパクト等）" />
-        <div style={{ height: 10 }} />
-        <Field label="効果音の音量">
-          <Slider value={a.sfxVolume} min={0} max={1} onChange={(v) => update((p) => void (p.audio.sfxVolume = v))} />
-        </Field>
-      </div>
-      <div className="section">
-        <div className="section-title">ナレーション・字幕</div>
-        <Toggle checked={a.narration} onChange={(v) => update((p) => void (p.audio.narration = v))} label="セリフを音声で読み上げる" />
-        <div style={{ height: 10 }} />
-        <Field label="音声合成エンジン" hint="声は Irodori-TTS を使います（ローカルで動かします。GPU推奨）">
-          <div className="chips">
-            <button className="chip on">Irodori-TTS</button>
-          </div>
-        </Field>
-        {tts.provider === 'irodori' ? (
-          ir.online ? (
-            <div className="notice" style={{ marginBottom: 10 }}>
-              <Ic n={CircleCheck} />Irodori-TTS に接続中（{ir.url} ／ {ir.checkpoint?.split('/').pop() ?? 'モデル不明'} ／ {ir.device ?? '?'}）
-              {ir.device === 'cpu' ? ' — GPUなしのため1セリフの生成に30〜60秒かかります' : ''}
+      </Section>
+
+      {a.narration ? (
+        <Section title="セリフの音声">
+          <NarrationList project={project} runJob={runJob} onSelectScene={onSelectScene} />
+        </Section>
+      ) : null}
+
+      <Section title="BGM" footer="セリフの間は自動で音量が下がります">
+        <div className="group">
+          <Cell>
+            <Seg
+              block
+              value={bgmMode}
+              onChange={(v) => {
+                if (v === 'default') update((p) => void (p.audio.bgm = undefined));
+                if (v === 'none') update((p) => void (p.audio.bgm = 'none'));
+              }}
+              options={[
+                { value: 'default', label: '組み込み' },
+                { value: 'none', label: 'なし' },
+                ...(bgmMode === 'custom' ? [{ value: 'custom' as const, label: 'ファイル' }] : []),
+              ]}
+            />
+          </Cell>
+          <Cell label={bgmMode === 'custom' ? a.bgm!.split('/').pop() : '手持ちの曲を使う'} sub={bgmMode === 'default' ? '組み込み: 150BPMのポップな曲' : undefined}>
+            <FilePick accept="audio/*" onFile={uploadBgm}>
+              <Ic n={Music} size={13} mr={0} />
+              {bgmMode === 'custom' ? '変更…' : '選ぶ…'}
+            </FilePick>
+          </Cell>
+          <Cell label="音量" stack>
+            <Slider value={a.bgmVolume} min={0} max={1} disabled={bgmMode === 'none'} onChange={(v) => update((p) => void (p.audio.bgmVolume = v))} />
+          </Cell>
+        </div>
+      </Section>
+
+      <Section title="効果音">
+        <div className="group">
+          <Cell label="自動で効果音を付ける" sub="ポップ・ワイプ・インパクトなど">
+            <Toggle checked={a.sfx} onChange={(v) => update((p) => void (p.audio.sfx = v))} />
+          </Cell>
+          <Cell label="音量" stack>
+            <Slider value={a.sfxVolume} min={0} max={1} disabled={!a.sfx} onChange={(v) => update((p) => void (p.audio.sfxVolume = v))} />
+          </Cell>
+        </div>
+      </Section>
+
+      <Section title="詳細">
+        <div className="group">
+          <Disclosure summary="テンポとフレームレート">
+            <div className="kv">
+              <span>BPM</span>
+              <div className="hstack">
+                <Num value={a.bpm} min={0} max={240} onChange={(v) => update((p) => void (p.audio.bpm = v))} style={{ width: 90 }} />
+                <span className="caption">シーンの切り替えを曲のビートに合わせます（0で無効）</span>
+              </div>
             </div>
-          ) : (
-            <div className="error" style={{ marginBottom: 10 }}>
-              Irodori-TTS サーバー（{ir.url}）に接続できません。ターミナルで <code>npm run irodori</code> を実行して起動してから、このページを開き直してください。
+            <div className="kv">
+              <span>fps</span>
+              <div className="hstack">
+                <Num value={project.fps} min={24} max={60} onChange={(v) => update((p) => void (p.fps = Math.round(v)))} style={{ width: 90 }} />
+                <span className="caption">1秒あたりのコマ数</span>
+              </div>
             </div>
-          )
-        ) : !meta.openai ? (
-          <div className="error" style={{ marginBottom: 10 }}>OPENAI_API_KEY が未設定です。</div>
-        ) : null}
-        <Field label="ナレーション音量">
-          <Slider value={a.narrationVolume} min={0} max={1} onChange={(v) => update((p) => void (p.audio.narrationVolume = v))} />
-        </Field>
-        <Toggle checked={project.subtitles} onChange={(v) => update((p) => void (p.subtitles = v))} label="全セリフを字幕でも表示（音なし再生対策）" />
-      </div>
-      <div className="section">
-        <div className="section-title">ナレーションの確認・作り直し</div>
-        <NarrationList project={project} runJob={runJob} onSelectScene={onSelectScene} />
-      </div>
-      <div className="section">
-        <div className="section-title">動画</div>
-        <Field label="フレームレート">
-          <Num value={project.fps} min={24} max={60} onChange={(v) => update((p) => void (p.fps = Math.round(v)))} />
-        </Field>
-      </div>
+          </Disclosure>
+        </div>
+      </Section>
     </div>
   );
 };

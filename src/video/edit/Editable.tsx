@@ -38,7 +38,8 @@ const EditContext = createContext<EditMode | null>(null);
 export const EditModeProvider = EditContext.Provider;
 export const useEditMode = () => useContext(EditContext);
 
-const PURPLE = '#7c5cff';
+/** 選択・操作ハンドルの色（エディターのアクセントカラーと同じ青） */
+const ACCENT = '#0a84ff';
 
 type Box = { x: number; y: number; w: number; h: number };
 type InlineText = Box & {
@@ -232,35 +233,54 @@ export const Editable: React.FC<{
     const tc = T(cx, b.y);
     const bc = T(cx, b.y + b.h);
     const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
-    const UI = 30;
-    const rot = { x: clamp(tc.x + Math.sin(th) * 38, UI / 2, ow - UI / 2), y: clamp(tc.y - Math.cos(th) * 38, UI / 2, oh - UI / 2) };
+    const UI = 20;
+    const BTN = 28;
+    const nBtn = 4 + (text ? 3 : 0);
+    const barHalf = (nBtn * BTN + (nBtn - 1) * 2 + 8) / 2;
+    const rot = { x: clamp(tc.x + Math.sin(th) * 30, UI / 2, ow - UI / 2), y: clamp(tc.y - Math.cos(th) * 30, UI / 2, oh - UI / 2) };
     const sc = { x: clamp(corners[2].x, UI / 2, ow - UI / 2), y: clamp(corners[2].y, UI / 2, oh - UI / 2) };
     const topY = Math.min(...corners.map((c) => c.y));
-    const bar = { x: clamp(barAt === 'top' ? tc.x : bc.x, 140, Math.max(140, ow - 140)), y: barAt === 'top' ? clamp(topY - 96, 4, oh - 44) : clamp(bc.y + 14, 4, oh - 44) };
+    const bar = { x: clamp(barAt === 'top' ? tc.x : bc.x, barHalf + 4, Math.max(barHalf + 4, ow - barHalf - 4)), y: barAt === 'top' ? clamp(topY - 80, 4, oh - 40) : clamp(bc.y + 12, 4, oh - 40) };
     const at = (p: { x: number; y: number }): React.CSSProperties => ({ left: p.x, top: p.y, transform: 'translate(-50%, -50%)' });
     return (
       <div data-edit-frame style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
         <svg width={ow} height={oh} style={{ position: 'absolute', inset: 0, overflow: 'visible', pointerEvents: 'none' }}>
-          <polygon points={corners.map((c) => `${c.x},${c.y}`).join(' ')} fill="none" stroke={PURPLE} strokeWidth={2} />
-          <line x1={tc.x} y1={tc.y} x2={rot.x} y2={rot.y} stroke={PURPLE} strokeWidth={2} />
+          <polygon points={corners.map((c) => `${c.x},${c.y}`).join(' ')} fill="none" stroke={ACCENT} strokeWidth={2} />
+          <line x1={tc.x} y1={tc.y} x2={rot.x} y2={rot.y} stroke={ACCENT} strokeWidth={2} />
         </svg>
         {draft === null ? (
           <>
             <div data-edit-ui title="ドラッグで回転（Shiftで15度ずつ）" onPointerDown={onRotateDown} style={{ ...handle(UI), ...at(rot), borderRadius: '50%', cursor: 'grab' }}>
-              <RotateCw size={16} strokeWidth={2.4} />
+              <RotateCw size={11} strokeWidth={2.6} />
             </div>
-            <div data-edit-ui title="ドラッグで拡大縮小" onPointerDown={onScaleDown} style={{ ...handle(UI), ...at(sc), borderRadius: 6, cursor: 'nwse-resize' }}>
-              <Scaling size={16} strokeWidth={2.4} />
+            <div data-edit-ui title="ドラッグで拡大縮小" onPointerDown={onScaleDown} style={{ ...handle(UI), ...at(sc), borderRadius: 5, cursor: 'nwse-resize' }}>
+              <Scaling size={11} strokeWidth={2.6} />
             </div>
-            <div data-edit-frame style={{ position: 'absolute', left: bar.x, top: bar.y, transform: 'translateX(-50%)', display: 'flex', gap: 6, pointerEvents: 'none' }}>
-              <Chip ui={UI} title="縮小" onClick={() => nudge((a) => ({ ...a, scale: a.scale / 1.08 }))}>
-                <Minus size={16} strokeWidth={2.6} />
+            <div
+              data-edit-frame
+              style={{
+                position: 'absolute',
+                left: bar.x,
+                top: bar.y,
+                transform: 'translateX(-50%)',
+                display: 'flex',
+                gap: 2,
+                padding: 4,
+                borderRadius: 11,
+                background: 'rgba(28,28,30,0.86)',
+                backdropFilter: 'blur(12px)',
+                boxShadow: '0 6px 20px rgba(0,0,0,0.28)',
+                pointerEvents: 'none',
+              }}
+            >
+              <Chip ui={BTN} title="縮小" onClick={() => nudge((a) => ({ ...a, scale: a.scale / 1.08 }))}>
+                <Minus size={15} strokeWidth={2} />
               </Chip>
-              <Chip ui={UI} title="拡大" onClick={() => nudge((a) => ({ ...a, scale: a.scale * 1.08 }))}>
-                <Plus size={16} strokeWidth={2.6} />
+              <Chip ui={BTN} title="拡大" onClick={() => nudge((a) => ({ ...a, scale: a.scale * 1.08 }))}>
+                <Plus size={15} strokeWidth={2} />
               </Chip>
-              <Chip ui={UI} title="位置・大きさ・回転を元に戻す" onClick={() => nudge((a) => ({ ...a, dx: 0, dy: 0, scale: 1, rotate: 0 }))}>
-                <RotateCcw size={15} strokeWidth={2.4} />
+              <Chip ui={BTN} title="位置・大きさ・回転を元に戻す" onClick={() => nudge((a) => ({ ...a, dx: 0, dy: 0, scale: 1, rotate: 0 }))}>
+                <RotateCcw size={14} strokeWidth={2} />
               </Chip>
               {text
                 ? (
@@ -270,14 +290,13 @@ export const Editable: React.FC<{
                       ['right', AlignRight, '右揃え'],
                     ] as const
                   ).map(([v, Icon, label]) => (
-                    <Chip key={v} ui={UI} active={adj.align === v} title={label} onClick={() => nudge((a) => ({ ...a, align: a.align === v ? undefined : v }))}>
-                      <Icon size={16} strokeWidth={2.4} />
+                    <Chip key={v} ui={BTN} active={adj.align === v} title={label} onClick={() => nudge((a) => ({ ...a, align: a.align === v ? undefined : v }))}>
+                      <Icon size={15} strokeWidth={2} />
                     </Chip>
                   ))
                 : null}
-              <Chip ui={UI} danger title={`${layoutLabel(id, scene)}を削除（要素リストで元に戻せます）`} onClick={() => nudge((a) => ({ ...a, hidden: true }))}>
-                <Trash2 size={15} strokeWidth={2.4} />
-                削除
+              <Chip ui={BTN} danger title={`${layoutLabel(id, scene)}を隠す（「要素の表示と位置」で戻せます）`} onClick={() => nudge((a) => ({ ...a, hidden: true }))}>
+                <Trash2 size={15} strokeWidth={2} />
               </Chip>
             </div>
           </>
@@ -288,14 +307,22 @@ export const Editable: React.FC<{
 
   /** 元の文字の位置・書体を測って、その上に同じ見た目の入力欄を重ねる */
   const beginEdit = () => {
-    const el = rootRef.current;
-    if (!el || !text || !edit) return;
+    if (!rootRef.current || !text || !edit) return;
+    // まだ何も選んでいなければ、選ぶとシーンが「全要素を出した状態」で止まって位置が変わるので、描き直してから測る
+    const settled = Boolean(edit.selectedId);
     edit.pause();
     edit.select(id);
     if (adj.z == null || adj.z !== frontZ()) {
       edit.beginGesture();
       put(adj, true);
     }
+    if (settled) startInline();
+    else requestAnimationFrame(() => requestAnimationFrame(startInline));
+  };
+
+  const startInline = () => {
+    const el = rootRef.current;
+    if (!el || !text || !edit) return;
     const prev = el.style.transform;
     el.style.transform = 'none';
     const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
@@ -348,10 +375,8 @@ export const Editable: React.FC<{
 
   const showUi = selected && draft === null && (mode === 'flow' || box);
   const portal = showUi && box && pivot && edit?.overlay ? createPortal(renderUi(), edit.overlay) : null;
-  const outline =
-    active && mode === 'flow' && !selected
-      ? { outline: `${line}px dashed rgba(124,92,255,0.7)`, outlineOffset: 3 / cs }
-      : {};
+  // 触れられる要素は、マウスを乗せた時だけ細い枠を出す（CSS の [data-edit-hover]:hover）
+  const hoverVars = active && !selected ? ({ '--edit-line': `${line}px`, '--edit-off': `${3 / cs}px` } as React.CSSProperties) : {};
 
   return (
     <div
@@ -360,6 +385,7 @@ export const Editable: React.FC<{
       data-edit-id={id}
       data-ea={adj.align}
       data-editing={draft !== null && inline ? '' : undefined}
+      data-edit-hover={active && mode === 'flow' && !selected ? '' : undefined}
       onPointerDown={active ? onBodyDown : undefined}
       onDoubleClick={
         active && text
@@ -376,13 +402,13 @@ export const Editable: React.FC<{
         transformOrigin: origin,
         cursor: active ? 'move' : undefined,
         touchAction: active ? 'none' : undefined,
-        ...outline,
+        ...hoverVars,
       }}
     >
       {adj.align ? <style>{`[data-ea="${adj.align}"] * { text-align: ${adj.align} !important; }`}</style> : null}
       {children}
       {active && mode === 'layer' && box && !selected ? (
-        <div data-edit-frame style={{ ...frameStyle, outline: `${line}px dashed rgba(124,92,255,0.7)`, outlineOffset: 3 / cs, pointerEvents: 'none' }} />
+        <div data-edit-frame data-edit-hover-frame style={{ ...frameStyle, outline: `${line}px solid rgba(10,132,255,0.75)`, outlineOffset: 3 / cs, pointerEvents: 'none' }} />
       ) : null}
       {portal}
       {draft !== null ? (
@@ -427,11 +453,11 @@ export const Editable: React.FC<{
                   whiteSpace: 'pre',
                   background: 'transparent',
                   border: 'none',
-                  outline: `${line}px dashed ${PURPLE}`,
+                  outline: `${line}px dashed ${ACCENT}`,
                   outlineOffset: 4 / cs,
                   margin: 0,
                   padding: '0 24px',
-                  caretColor: PURPLE,
+                  caretColor: ACCENT,
                   fontFamily: inline.fontFamily,
                   fontSize: inline.fontSize,
                   fontWeight: inline.fontWeight,
@@ -450,7 +476,7 @@ export const Editable: React.FC<{
                   font: '700 32px "Noto Sans JP", sans-serif',
                   background: '#fff',
                   color: '#15172b',
-                  border: `3px solid ${PURPLE}`,
+                  border: `3px solid ${ACCENT}`,
                   pointerEvents: 'auto',
                 }
           }
@@ -460,6 +486,7 @@ export const Editable: React.FC<{
   );
 };
 
+/** 回転・拡大縮小のつまみ（白い小さな丸／角丸の四角。macOS の選択ハンドル風） */
 const handle = (ui: number): React.CSSProperties => ({
   position: 'absolute',
   width: ui,
@@ -467,40 +494,39 @@ const handle = (ui: number): React.CSSProperties => ({
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',
-  fontSize: ui * 0.62,
-  fontFamily: 'sans-serif',
-  fontWeight: 800,
-  lineHeight: 1,
-  background: PURPLE,
-  color: '#fff',
-  border: `${Math.max(2, ui / 12)}px solid #fff`,
+  background: '#fff',
+  color: ACCENT,
+  border: `1.5px solid ${ACCENT}`,
+  boxShadow: '0 1px 4px rgba(0,0,0,0.25)',
   boxSizing: 'border-box',
   pointerEvents: 'auto',
   touchAction: 'none',
 });
 
+/** 操作バーのボタン（暗い半透明のバーに並ぶアイコン） */
 const Chip: React.FC<{ ui: number; title: string; danger?: boolean; active?: boolean; onClick: () => void; children: React.ReactNode }> = ({ ui, title, danger, active, onClick, children }) => (
   <button
     type="button"
     data-edit-ui
     title={title}
+    aria-label={title}
     onPointerDown={(e) => e.stopPropagation()}
     onClick={(e) => {
       e.stopPropagation();
       onClick();
     }}
     style={{
-      fontFamily: '"Noto Sans JP", sans-serif',
-      fontSize: ui * 0.62,
-      fontWeight: 800,
-      lineHeight: 1,
-      padding: `${ui * 0.3}px ${ui * 0.5}px`,
-      borderRadius: 999,
-      border: `${Math.max(2, ui / 12)}px solid #fff`,
-      background: danger ? '#ff5d6c' : active ? '#15172b' : PURPLE,
-      color: '#fff',
+      width: ui,
+      height: ui,
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      padding: 0,
+      borderRadius: 7,
+      border: 0,
+      background: active ? 'rgba(255,255,255,0.22)' : 'transparent',
+      color: danger ? '#ff6961' : '#fff',
       cursor: 'pointer',
-      whiteSpace: 'nowrap',
     }}
   >
     {children}

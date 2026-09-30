@@ -1,53 +1,42 @@
-import { confirmDialog } from '../components/Dialogs';
-import { Plus } from 'lucide-react';
 import { Player, type PlayerRef } from '@remotion/player';
+import {
+  ChevronLeft, CircleAlert, Download, RectangleHorizontal, RectangleVertical, Redo2, Sparkles, Square, Undo2, X,
+} from 'lucide-react';
 import React, { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { AdVideo } from '../../video/AdVideo';
-import { isAudioStale } from '../../video/narrationKey';
 import { applyTextTarget, readAdjust, sceneLayout, setSceneLayout, type TextTarget } from '../../video/edit/textEdit';
 import { EditModeProvider, type EditMode } from '../../video/edit/Editable';
+import { isAudioStale } from '../../video/narrationKey';
 import { FORMATS, Project, type ElementAdjust, type Scene, type SceneType } from '../../video/schema';
-import { newScene, remapCast, SCENE_TYPE_LABELS } from '../../video/templates';
+import { newScene, remapCast } from '../../video/templates';
 import { computeTimeline } from '../../video/timeline';
 import { api, ttsFor, waitJob, type Job } from '../api';
 import { go, MetaContext } from '../App';
-import { Progress, Seg } from '../components/Fields';
 import { AudioPanel } from '../components/AudioPanel';
 import { BrandPanel } from '../components/BrandPanel';
 import { CastPanel } from '../components/CastPanel';
+import { confirmDialog } from '../components/Dialogs';
+import { Progress, Seg, Sheet } from '../components/Fields';
 import { RenderDialog } from '../components/RenderDialog';
 import { ReviseDialog } from '../components/ReviseDialog';
 import { SceneInspector } from '../components/SceneInspector';
-import { ArrowLeft, Check, ChevronDown, ChevronUp, Circle, Copy, Download, Mic, MousePointer2, Play, Redo2, Sparkles, TriangleAlert, Undo2, X } from 'lucide-react';
+import { SceneNavigator } from '../components/SceneNavigator';
+import { Transport } from '../components/Transport';
 import { Ic } from '../icons';
 
 export type Update = (fn: (draft: Project) => void, opts?: { silent?: boolean }) => void;
 export type RunJob = (label: string, url: string, body?: unknown) => Promise<Job | null>;
-
-const sceneSummary = (s: Scene, brand: string) => {
-  switch (s.type) {
-    case 'logo':
-      return (s.logoText || brand).replace(/\n/g, ' ');
-    case 'feature':
-      return `${s.eyebrow} ${s.headline}`.replace(/\[\[|\]\]|\n/g, '');
-    case 'showcase':
-      return s.title.replace(/\[\[|\]\]|\n/g, '');
-    case 'cta':
-      return s.buttonText;
-    default:
-      return (s.headline || s.lines[0]?.text || '').replace(/\n/g, '');
-  }
-};
+type Tab = 'scene' | 'design' | 'cast' | 'sound';
 
 /** コンテナにアスペクト比を保って収める */
-const useFit = (ratio: number) => {
+const useFit = (ratio: number, padX = 40, padY = 54) => {
   const [el, setEl] = useState<HTMLDivElement | null>(null);
   const [size, setSize] = useState({ w: 0, h: 0 });
   useLayoutEffect(() => {
     if (!el) return;
     const measure = () => {
-      const cw = el.clientWidth - 32;
-      const ch = el.clientHeight - 32;
+      const cw = el.clientWidth - padX;
+      const ch = el.clientHeight - padY;
       const w = Math.max(0, Math.min(cw, ch * ratio));
       setSize({ w, h: w / ratio });
     };
@@ -55,8 +44,31 @@ const useFit = (ratio: number) => {
     const ro = new ResizeObserver(measure);
     ro.observe(el);
     return () => ro.disconnect();
-  }, [el, ratio]);
+  }, [el, ratio, padX, padY]);
   return { ref: setEl, size };
+};
+
+/** シーンを複製する（セリフIDを振り直し、位置調整のキーも付け替える） */
+const cloneScene = (src: Scene): Scene => {
+  const c = structuredClone(src);
+  c.id = `s-${Math.random().toString(36).slice(2, 8)}`;
+  const ids = new Map<string, string>();
+  c.lines.forEach((l) => {
+    const next = `l-${Math.random().toString(36).slice(2, 8)}`;
+    ids.set(l.id, next);
+    l.id = next;
+  });
+  if (c.layouts) {
+    for (const f of Object.keys(c.layouts) as (keyof typeof c.layouts)[]) {
+      c.layouts[f] = Object.fromEntries(
+        Object.entries(c.layouts[f] ?? {}).map(([k, v]) => {
+          const m = /^(line|caption):(.+)$/.exec(k);
+          return [m && ids.has(m[2]) ? `${m[1]}:${ids.get(m[2])}` : k, v];
+        }),
+      );
+    }
+  }
+  return c;
 };
 
 export const Editor: React.FC<{ id: string }> = ({ id }) => {
@@ -65,13 +77,13 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
   const [loadErr, setLoadErr] = useState<string | null>(null);
   const [saveState, setSaveState] = useState<'saved' | 'saving' | 'dirty' | 'error'>('saved');
   const [selected, setSelected] = useState(0);
-  const [tab, setTab] = useState<'scene' | 'brand' | 'cast' | 'audio'>('scene');
+  const [tab, setTab] = useState<Tab>('scene');
   const [job, setJob] = useState<{ label: string; job: Job | null } | null>(null);
   const [jobErr, setJobErr] = useState<string | null>(null);
   const [dialog, setDialog] = useState<'render' | 'revise' | null>(null);
-  const [addMenu, setAddMenu] = useState(false);
   const [frame, setFrame] = useState(0);
-  const [editing, setEditing] = useState(false);
+  const [playing, setPlaying] = useState(false);
+  const [muted, setMuted] = useState(false);
   const [selectedEl, setSelectedEl] = useState<string | null>(null);
   const boxRef = useRef<HTMLDivElement>(null);
   const [overlayEl, setOverlayEl] = useState<HTMLDivElement | null>(null);
@@ -85,6 +97,8 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
   const pending = useRef<Project | null>(null);
   const saving = useRef<Promise<unknown>>(Promise.resolve());
   const history = useRef<{ past: Project[]; future: Project[] }>({ past: [], future: [] });
+  // 一時停止中は、映像の要素を直接つかんで動かせる（モードの切り替えは不要）
+  const editing = !playing;
 
   const reload = useCallback(async () => {
     const p = await api.get(id);
@@ -162,36 +176,51 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
     projectRef.current = project;
   }, [project]);
 
+  const timeline = useMemo(() => (project ? computeTimeline(project) : null), [project]);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const tag = (e.target as HTMLElement)?.tagName;
-      if (tag === 'INPUT' || tag === 'TEXTAREA') return;
-      // 直接調整: 矢印で1px（Shiftで10px）、Delete で非表示、Esc で選択解除
+      const t = e.target as HTMLElement;
+      if (t?.tagName === 'INPUT' || t?.tagName === 'TEXTAREA' || t?.tagName === 'SELECT' || t?.isContentEditable) return;
+      // 直接編集: 矢印で1px（Shiftで10px）、Delete で非表示、Esc で選択解除
       if (editingRef.current && selectedRef.current) {
         const sc = activeSceneRef.current;
-        const id = selectedRef.current;
+        const sid = selectedRef.current;
         const step = e.shiftKey ? 10 : 1;
         const d = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }[e.key] as number[] | undefined;
         if (sc && d) {
           e.preventDefault();
           editApi.current?.beginGesture();
-          const cur = readAdjust(sc, id, projectRef.current?.format ?? 'vertical');
-          editApi.current?.commit(sc.id, id, { ...cur, dx: cur.dx + d[0], dy: cur.dy + d[1] }, true);
+          const cur = readAdjust(sc, sid, projectRef.current?.format ?? 'vertical');
+          editApi.current?.commit(sc.id, sid, { ...cur, dx: cur.dx + d[0], dy: cur.dy + d[1] }, true);
           return;
         }
         if (sc && (e.key === 'Delete' || e.key === 'Backspace')) {
           e.preventDefault();
           editApi.current?.beginGesture();
-          editApi.current?.commit(sc.id, id, { ...readAdjust(sc, id, projectRef.current?.format ?? 'vertical'), hidden: true }, true);
+          editApi.current?.commit(sc.id, sid, { ...readAdjust(sc, sid, projectRef.current?.format ?? 'vertical'), hidden: true }, true);
           setSelectedEl(null);
           return;
         }
-        if (e.key === 'Escape') setSelectedEl(null);
+        if (e.key === 'Escape') {
+          setSelectedEl(null);
+          return;
+        }
+      }
+      // 何も選んでいない時の ← → はコマ送り（Shift で1秒）
+      if (!selectedRef.current && (e.key === 'ArrowLeft' || e.key === 'ArrowRight') && playerRef.current) {
+        e.preventDefault();
+        const p = playerRef.current;
+        p.pause();
+        const stepF = e.shiftKey ? projectRef.current?.fps ?? 30 : 1;
+        p.seekTo(Math.max(0, p.getCurrentFrame() + (e.key === 'ArrowLeft' ? -stepF : stepF)));
+        return;
       }
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z') {
         e.preventDefault();
         if (e.shiftKey) redo();
         else undo();
+        return;
       }
       if (e.key === ' ') {
         e.preventDefault();
@@ -219,7 +248,7 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
       try {
         const { jobId } = await api.post(url, body);
         const done = await waitJob(jobId, (j) => setJob({ label, job: j }));
-        const before = project;
+        const before = projectRef.current;
         await reload();
         if (before) {
           history.current.past.push(before);
@@ -233,28 +262,50 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
         return null;
       }
     },
-    [flush, reload, project],
+    [flush, reload],
   );
 
-  const timeline = useMemo(() => (project ? computeTimeline(project) : null), [project]);
   const fmt = project ? FORMATS[project.format] : FORMATS.vertical;
   const { ref: stageRef, size } = useFit(fmt.width / fmt.height);
 
   useEffect(() => {
     const p = playerRef.current;
     if (!p) return;
-    const on = (e: { detail: { frame: number } }) => setFrame(e.detail.frame);
-    p.addEventListener('frameupdate', on);
-    return () => p.removeEventListener('frameupdate', on);
-  }, [project?.id, size.w]);
+    const onFrame = (e: { detail: { frame: number } }) => setFrame(e.detail.frame);
+    const onPlay = () => {
+      setPlaying(true);
+      setSelectedEl(null);
+    };
+    const onPause = () => setPlaying(false);
+    const onMute = (e: { detail: { isMuted: boolean } }) => setMuted(e.detail.isMuted);
+    p.addEventListener('frameupdate', onFrame);
+    p.addEventListener('seeked', onFrame);
+    p.addEventListener('play', onPlay);
+    p.addEventListener('pause', onPause);
+    p.addEventListener('ended', onPause);
+    p.addEventListener('mutechange', onMute);
+    return () => {
+      p.removeEventListener('frameupdate', onFrame);
+      p.removeEventListener('seeked', onFrame);
+      p.removeEventListener('play', onPlay);
+      p.removeEventListener('pause', onPause);
+      p.removeEventListener('ended', onPause);
+      p.removeEventListener('mutechange', onMute);
+    };
+  }, [project?.id, size.w > 0]);
 
-  const staleCount = useMemo(
-    () => (project ? project.scenes.reduce((a, s) => a + s.lines.filter((l) => isAudioStale(l, project.cast, ttsFor(meta, project.audio.ttsProvider).engine)).length, 0) : 0),
-    [project, meta],
+  const tts = ttsFor(meta, project?.audio.ttsProvider);
+  const staleByScene = useMemo(
+    () => (project ? project.scenes.map((s) => s.lines.filter((l) => isAudioStale(l, project.cast, tts.engine)).length) : []),
+    [project, tts.engine],
   );
+  const staleCount = staleByScene.reduce((a, b) => a + b, 0);
 
   /** 実スクリーンショット未設定の画面紹介シーン（番号）。書き出し前に必須 */
-  const missingShots = useMemo(() => (project ? project.scenes.flatMap((s, i) => (s.type === 'showcase' && (!s.screenshot || s.screenshot.startsWith('ui:')) ? [i + 1] : [])) : []), [project]);
+  const missingShots = useMemo(
+    () => (project ? project.scenes.flatMap((s, i) => (s.type === 'showcase' && (!s.screenshot || s.screenshot.startsWith('ui:')) ? [i + 1] : [])) : []),
+    [project],
+  );
 
   const inputProps = useMemo(() => (project ? { project, assetBaseUrl: `/files/${project.id}/` } : null), [project]);
 
@@ -262,72 +313,103 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
   const activeSceneId = editing && project && curIdx >= 0 ? project.scenes[curIdx]?.id ?? null : null;
   const compScale = size.w > 0 ? size.w / fmt.width : 1;
   // 再生中は毎フレームこのコンポーネントが描き直されるので、値を使い回す（作り直すと映像全体が再描画されて音がとぎれる）
-  const editMode: EditMode = useMemo(() => ({
-    enabled: editing,
-    activeSceneId,
-    compScale,
-    canvas: { w: fmt.width, h: fmt.height },
-    overlay: overlayEl,
-    selectedId: selectedEl,
-    select: setSelectedEl,
-    beginGesture: () => {
-      const cur = projectRef.current;
-      if (!cur) return;
-      history.current.past.push(cur);
-      if (history.current.past.length > 60) history.current.past.shift();
-      history.current.future = [];
-    },
-    commit: (sceneId, id, adjust: ElementAdjust | null, silent) =>
-      update((p) => {
-        const sc = p.scenes.find((x) => x.id === sceneId);
-        if (!sc) return;
-        // 今の画面の形（縦型・正方形・横型）の調整だけを書き換える
-        const layout = { ...sceneLayout(sc, p.format) };
-        if (adjust) layout[id] = adjust;
-        else delete layout[id];
-        setSceneLayout(sc, p.format, layout);
-      }, { silent: silent ?? false }),
-    commitText: (sceneId, target: TextTarget, value) =>
-      update((p) => {
-        if (target.type === 'brandName') {
-          p.brand.name = value;
-          return;
-        }
-        const sc = p.scenes.find((x) => x.id === sceneId);
-        if (sc) applyTextTarget(sc, target, value);
-      }),
-    patchLine: (sceneId, lineId, patch, silent) =>
-      update((p) => {
-        const line = p.scenes.find((x) => x.id === sceneId)?.lines.find((l) => l.id === lineId);
-        if (line) Object.assign(line, patch);
-      }, { silent: silent ?? false }),
-    pause: () => playerRef.current?.pause(),
-    getOrigin: () => {
-      const r = boxRef.current?.getBoundingClientRect();
-      return { left: r?.left ?? 0, top: r?.top ?? 0 };
-    },
-  }), [editing, activeSceneId, compScale, fmt.width, fmt.height, selectedEl, overlayEl, update]);
+  const editMode: EditMode = useMemo(
+    () => ({
+      enabled: editing,
+      activeSceneId,
+      compScale,
+      canvas: { w: fmt.width, h: fmt.height },
+      overlay: overlayEl,
+      selectedId: selectedEl,
+      select: setSelectedEl,
+      beginGesture: () => {
+        const cur = projectRef.current;
+        if (!cur) return;
+        history.current.past.push(cur);
+        if (history.current.past.length > 60) history.current.past.shift();
+        history.current.future = [];
+      },
+      commit: (sceneId, elId, adjust: ElementAdjust | null, silent) =>
+        update(
+          (p) => {
+            const sc = p.scenes.find((x) => x.id === sceneId);
+            if (!sc) return;
+            // 今の画面の形（縦型・正方形・横型）の調整だけを書き換える
+            const layout = { ...sceneLayout(sc, p.format) };
+            if (adjust) layout[elId] = adjust;
+            else delete layout[elId];
+            setSceneLayout(sc, p.format, layout);
+          },
+          { silent: silent ?? false },
+        ),
+      commitText: (sceneId, target: TextTarget, value) =>
+        update((p) => {
+          if (target.type === 'brandName') {
+            p.brand.name = value;
+            return;
+          }
+          const sc = p.scenes.find((x) => x.id === sceneId);
+          if (sc) applyTextTarget(sc, target, value);
+        }),
+      patchLine: (sceneId, lineId, patch, silent) =>
+        update(
+          (p) => {
+            const line = p.scenes.find((x) => x.id === sceneId)?.lines.find((l) => l.id === lineId);
+            if (line) Object.assign(line, patch);
+          },
+          { silent: silent ?? false },
+        ),
+      pause: () => playerRef.current?.pause(),
+      getOrigin: () => {
+        const r = boxRef.current?.getBoundingClientRect();
+        return { left: r?.left ?? 0, top: r?.top ?? 0 };
+      },
+    }),
+    [editing, activeSceneId, compScale, fmt.width, fmt.height, selectedEl, overlayEl, update],
+  );
 
-  if (loadErr) return <div className="home"><div className="error">{loadErr}</div></div>;
-  if (!project || !timeline || !inputProps) return <div className="home muted">読み込み中…</div>;
+  // 別のシーンへ移ったら選択を外す（選んでいる間だけシーンを「全要素を出した状態」で止めるため）
+  const lastScene = useRef<string | null>(null);
+  useEffect(() => {
+    if (activeSceneId && lastScene.current && activeSceneId !== lastScene.current) setSelectedEl(null);
+    if (activeSceneId) lastScene.current = activeSceneId;
+  }, [activeSceneId]);
+
+  const selectElement = useCallback((elId: string) => {
+    playerRef.current?.pause();
+    setSelectedEl(elId);
+  }, []);
+
+  if (loadErr)
+    return (
+      <div className="home-main">
+        <div className="error">{loadErr}</div>
+      </div>
+    );
+  if (!project || !timeline || !inputProps)
+    return (
+      <div style={{ height: '100vh', display: 'grid', placeItems: 'center' }}>
+        <div className="spinner" />
+      </div>
+    );
 
   const sel = Math.min(selected, project.scenes.length - 1);
-  const selScene = project.scenes[sel];
 
   const selectScene = (i: number) => {
     setSelected(i);
     setTab('scene');
+    setSelectedEl(null);
     const st = timeline.scenes[i];
-    if (st) playerRef.current?.seekTo(st.start + Math.min(st.duration - 1, 12));
+    if (st) playerRef.current?.seekTo(st.start + Math.min(st.duration - 1, Math.round(st.duration * 0.62)));
   };
 
-  const moveScene = (i: number, d: number) => {
-    const j = i + d;
-    if (j < 0 || j >= project.scenes.length) return;
+  const moveScene = (from: number, to: number) => {
+    if (to < 0 || to >= project.scenes.length || from === to) return;
     update((p) => {
-      [p.scenes[i], p.scenes[j]] = [p.scenes[j], p.scenes[i]];
+      const [s] = p.scenes.splice(from, 1);
+      p.scenes.splice(to, 0, s);
     });
-    setSelected(j);
+    setSelected(to);
   };
 
   const addScene = (type: SceneType) => {
@@ -336,186 +418,119 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
       p.scenes.splice(sel + 1, 0, s);
     });
     setSelected(sel + 1);
-    setAddMenu(false);
+    setTab('scene');
   };
 
-  const setMode = (on: boolean) => {
-    setEditing(on);
-    setSelectedEl(null);
-    playerRef.current?.pause();
+  const deleteScene = async (i: number) => {
+    if (project.scenes.length <= 1) return;
+    const ok = await confirmDialog({ title: `シーン${i + 1}を削除しますか？`, message: '⌘Z（Ctrl+Z）で元に戻せます。', ok: '削除', danger: true });
+    if (!ok) return;
+    update((p) => void p.scenes.splice(i, 1));
+    setSelected((cur) => Math.max(0, cur >= i ? cur - 1 : cur));
   };
-  const currentScene = timeline.scenes.findIndex((st) => frame >= st.start && frame < st.start + st.duration);
-  const activeScene = editing && currentScene >= 0 ? project.scenes[currentScene] : null;
+
+  activeSceneRef.current = editing && curIdx >= 0 ? project.scenes[curIdx] : null;
   editingRef.current = editing;
   selectedRef.current = selectedEl;
-  activeSceneRef.current = activeScene;
-
   editApi.current = editMode;
+
+  const status =
+    saveState === 'saved' ? '保存済み' : saveState === 'saving' ? '保存中…' : saveState === 'dirty' ? '編集中' : '保存できませんでした';
 
   return (
     <div className="editor">
-      <div className="topbar">
-        <button
-          className="btn ghost"
-          onClick={async () => {
-            await flush();
-            go('/');
-          }}
-        >
-          <Ic n={ArrowLeft} mr={0} />
-        </button>
-        <input className="title-input" value={project.title} onChange={(e) => update((p) => void (p.title = e.target.value))} />
-        <span className="save-state">
-          {saveState === 'saved' ? <><Ic n={Check} />保存済み</> : saveState === 'saving' ? '保存中…' : saveState === 'dirty' ? '編集中' : <><Ic n={TriangleAlert} />保存失敗</>}
-        </span>
-        <button className="btn sm ghost" onClick={undo} title="元に戻す (Ctrl+Z)">
-          <Ic n={Undo2} mr={0} />
-        </button>
-        <button className="btn sm ghost" onClick={redo} title="やり直す (Ctrl+Shift+Z)">
-          <Ic n={Redo2} mr={0} />
-        </button>
-        <div className="spacer" />
+      <header className="toolbar">
+        <div className="tb-left">
+          <button
+            className="icon-btn"
+            title="プロジェクト一覧へ"
+            onClick={async () => {
+              await flush();
+              go('/');
+            }}
+          >
+            <Ic n={ChevronLeft} size={20} mr={0} />
+          </button>
+          <div className="doc-title">
+            <input value={project.title} onChange={(e) => update((p) => void (p.title = e.target.value))} aria-label="タイトル" />
+            <span className="status" style={saveState === 'error' ? { color: 'var(--red)' } : undefined}>
+              {saveState === 'error' ? <Ic n={CircleAlert} size={11} mr={0} /> : null}
+              {status}
+            </span>
+          </div>
+        </div>
         <Seg
           value={project.format}
           onChange={(v) => update((p) => void (p.format = v))}
           options={[
-            { value: 'vertical', label: '9:16' },
-            { value: 'square', label: '1:1' },
-            { value: 'horizontal', label: '16:9' },
+            { value: 'vertical', label: '縦', icon: RectangleVertical, title: '縦型 9:16（リール・ショート）' },
+            { value: 'square', label: '正方形', icon: Square, title: '正方形 1:1（フィード）' },
+            { value: 'horizontal', label: '横', icon: RectangleHorizontal, title: '横型 16:9（YouTube・Web）' },
           ]}
         />
-        <span className="faint">{(timeline.total / project.fps).toFixed(1)}秒</span>
-        <button className="btn" disabled={!meta.openai} onClick={() => setDialog('revise')} title="AIに修正を指示">
-          <Ic n={Sparkles} />AIで修正
-        </button>
-        <button
-          className="btn"
-          disabled={!ttsFor(meta, project.audio.ttsProvider).ready || staleCount === 0 || !project.audio.narration}
-          onClick={() => runJob('ナレーションを生成しています', `/api/projects/${project.id}/narration`)}
-          title={!ttsFor(meta, project.audio.ttsProvider).ready ? '音声エンジンが使えません（「音・設定」タブを確認）' : staleCount ? '変更されたセリフの音声を作成します' : 'すべてのセリフに音声があります'}
-        >
-          <Ic n={Mic} />ナレーション生成 {staleCount ? <span className="count">{staleCount}</span> : null}
-        </button>
-        <button
-          className="btn primary"
-          onClick={async () => {
-            await flush();
-            setDialog('render');
-          }}
-        >
-          <Ic n={Download} />書き出し
-        </button>
-      </div>
+        <div className="tb-right">
+          <button className="icon-btn" onClick={undo} disabled={!history.current.past.length} title="取り消す（⌘Z）">
+            <Ic n={Undo2} size={16} mr={0} />
+          </button>
+          <button className="icon-btn" onClick={redo} disabled={!history.current.future.length} title="やり直す（⇧⌘Z）">
+            <Ic n={Redo2} size={16} mr={0} />
+          </button>
+          <span className="tb-divider" />
+          <button className="btn" disabled={!meta.openai} onClick={() => setDialog('revise')} title={meta.openai ? '台本の直し方を文章で伝えます' : 'OPENAI_API_KEY が未設定です'}>
+            <Ic n={Sparkles} size={14} mr={0} />
+            AIで直す
+          </button>
+          <button
+            className="btn primary"
+            onClick={async () => {
+              await flush();
+              setDialog('render');
+            }}
+          >
+            <Ic n={Download} size={14} mr={0} />
+            書き出す
+          </button>
+        </div>
+      </header>
 
       <div className="workspace">
-        <div className="sidebar">
-          <div className="head">
-            <strong style={{ flex: 1 }}>シーン</strong>
-            <div style={{ position: 'relative' }}>
-              <button className="btn sm" onClick={() => setAddMenu((v) => !v)}>
-                <Ic n={Plus} />追加
-              </button>
-              {addMenu ? (
-                <div className="menu" style={{ right: 0, top: 30 }}>
-                  {(Object.keys(SCENE_TYPE_LABELS) as SceneType[]).map((t) => (
-                    <button key={t} onClick={() => addScene(t)}>
-                      {SCENE_TYPE_LABELS[t]}
-                    </button>
-                  ))}
-                </div>
-              ) : null}
-            </div>
-          </div>
-          <div className="scene-list">
-            {project.scenes.map((s, i) => {
-              const st = timeline.scenes[i];
-              const stale = s.lines.some((l) => isAudioStale(l, project.cast, ttsFor(meta, project.audio.ttsProvider).engine));
-              return (
-                <div key={s.id} className={`scene-item ${i === sel ? 'on' : ''}`} onClick={() => selectScene(i)}>
-                  <div className="num">{i + 1}</div>
-                  <div className="meta">
-                    <div className="type">
-                      {SCENE_TYPE_LABELS[s.type].split('（')[0]}
-                      <span className="dur">{st ? (st.duration / project.fps).toFixed(1) : '-'}s</span>
-                      {stale && project.audio.narration ? <span className="audio-stale" title="音声が未生成"><Ic n={Circle} size={8} mr={0} /></span> : null}
-                      {s.type === 'showcase' && (!s.screenshot || s.screenshot.startsWith('ui:')) ? <span className="audio-stale" title="スクリーンショット未設定"><Ic n={TriangleAlert} size={12} />画面未設定</span> : null}
-                    </div>
-                    <div className="text">{sceneSummary(s, project.brand.name) || '（未入力）'}</div>
-                  </div>
-                  <div className="tools" onClick={(e) => e.stopPropagation()}>
-                    <button title="上へ" onClick={() => moveScene(i, -1)}>
-                      <Ic n={ChevronUp} mr={0} />
-                    </button>
-                    <button title="下へ" onClick={() => moveScene(i, 1)}>
-                      <Ic n={ChevronDown} mr={0} />
-                    </button>
-                    <button
-                      title="複製"
-                      onClick={() =>
-                        update((p) => {
-                          const c = structuredClone(p.scenes[i]);
-                          c.id = `s-${Math.random().toString(36).slice(2, 8)}`;
-                          const ids = new Map<string, string>();
-                          c.lines.forEach((l) => {
-                            const next = `l-${Math.random().toString(36).slice(2, 8)}`;
-                            ids.set(l.id, next);
-                            l.id = next;
-                          });
-                          // 位置調整はセリフIDで保存しているので、新しいIDに付け替える
-                          if (c.layouts) {
-                            for (const f of Object.keys(c.layouts) as (keyof typeof c.layouts)[]) {
-                              c.layouts[f] = Object.fromEntries(
-                                Object.entries(c.layouts[f] ?? {}).map(([k, v]) => {
-                                  const m = /^(line|caption):(.+)$/.exec(k);
-                                  return [m && ids.has(m[2]) ? `${m[1]}:${ids.get(m[2])}` : k, v];
-                                }),
-                              );
-                            }
-                          }
-                          p.scenes.splice(i + 1, 0, c);
-                        })
-                      }
-                    >
-                      <Ic n={Copy} mr={0} />
-                    </button>
-                    <button
-                      title="削除"
-                      onClick={() => {
-                        if (project.scenes.length <= 1) return;
-                        confirmDialog({ title: `シーン${i + 1}を削除しますか？`, message: '「元に戻す」（Ctrl+Z）で戻せます。', ok: '削除する', danger: true }).then(
-                          (ok) => ok && update((p) => void p.scenes.splice(i, 1)),
-                        );
-                      }}
-                    >
-                      <Ic n={X} mr={0} />
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
+        <SceneNavigator
+          project={project}
+          selected={sel}
+          stale={project.audio.narration ? staleByScene.map((n) => n > 0) : project.scenes.map(() => false)}
+          onSelect={selectScene}
+          onMove={moveScene}
+          onDuplicate={(i) => {
+            update((p) => void p.scenes.splice(i + 1, 0, cloneScene(p.scenes[i])));
+            setSelected(i + 1);
+          }}
+          onDelete={deleteScene}
+          onAdd={addScene}
+        />
 
-        <div className={`stage ${editing ? 'editing' : ''}`}>
-          <div className={`modebar ${editing ? 'edit' : ''}`}>
-            <div className="mode-seg" role="tablist">
-              <button className={!editing ? 'on' : ''} onClick={() => setMode(false)} title="再生して仕上がりを確認します">
-                <Ic n={Play} size={13} />
-                プレビュー
-              </button>
-              <button className={editing ? 'on' : ''} onClick={() => setMode(true)} title="映像の要素を直接ドラッグして配置を調整します">
-                <Ic n={MousePointer2} size={13} />
-                直接調整
-              </button>
+        <main className="stage">
+          {project.audio.narration && (staleCount > 0 || !tts.ready) ? (
+            <div className="stage-banner">
+              {!tts.ready ? (
+                <>
+                  <span className="dot danger" />
+                  <span>音声エンジン（Irodori-TTS）に接続できません</span>
+                  <button className="btn sm plain" onClick={() => setTab('sound')}>
+                    詳しく
+                  </button>
+                </>
+              ) : (
+                <>
+                  <span className="dot warn" />
+                  <span>音声がまだないセリフが {staleCount} 件あります</span>
+                  <button className="btn sm primary" onClick={() => runJob('ナレーションを作っています', `/api/projects/${project.id}/narration`)}>
+                    音声を作成
+                  </button>
+                </>
+              )}
             </div>
-            <div className="spacer" />
-            {editing ? (
-              <button className="btn sm" onClick={() => setMode(false)}>
-                プレビューに戻る
-              </button>
-            ) : null}
-          </div>
-          <div className="player-wrap" ref={stageRef}>
+          ) : null}
+          <div className="canvas-wrap" ref={stageRef}>
             {size.w > 0 ? (
               <div
                 className="player-box"
@@ -525,78 +540,90 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
                 onPointerDown={editing ? () => setSelectedEl(null) : undefined}
               >
                 <EditModeProvider value={editing ? editMode : null}>
-                <Player
-                  ref={playerRef}
-                  component={AdVideo}
-                  inputProps={inputProps}
-                  durationInFrames={timeline.total}
-                  fps={project.fps}
-                  compositionWidth={fmt.width}
-                  compositionHeight={fmt.height}
-                  style={{ width: size.w, height: size.h }}
-                  controls={!editing}
-                  clickToPlay={!editing}
-                  numberOfSharedAudioTags={24}
-                  spaceKeyToPlayOrPause={false}
-                />
+                  <Player
+                    ref={playerRef}
+                    component={AdVideo}
+                    inputProps={inputProps}
+                    durationInFrames={timeline.total}
+                    fps={project.fps}
+                    compositionWidth={fmt.width}
+                    compositionHeight={fmt.height}
+                    style={{ width: size.w, height: size.h }}
+                    controls={false}
+                    clickToPlay={!editing}
+                    doubleClickToFullscreen={false}
+                    numberOfSharedAudioTags={24}
+                    spaceKeyToPlayOrPause={false}
+                    acknowledgeRemotionLicense
+                  />
                 </EditModeProvider>
                 <div ref={setOverlayEl} data-edit-overlay style={{ position: 'absolute', inset: 0, zIndex: 1000, pointerEvents: 'none' }} />
               </div>
             ) : null}
+            {editing ? (
+              <div className="stage-hint">{selectedEl ? 'ドラッグで移動・ダブルクリックで文字を編集・Esc で選択を解除' : 'クリックで選択・ダブルクリックで文字を編集'}</div>
+            ) : null}
           </div>
-          <div className="timeline">
-            {timeline.scenes.map((st, i) => (
-              <div
-                key={st.scene.id + i}
-                className={`blk ${i === sel ? 'on' : ''}`}
-                style={{ flex: st.duration }}
-                onClick={() => selectScene(i)}
-                title={sceneSummary(st.scene, project.brand.name)}
-              >
-                {i + 1}. {SCENE_TYPE_LABELS[st.scene.type].split('（')[0]}
-              </div>
-            ))}
-            <div className="head" style={{ left: `calc(14px + (100% - 28px) * ${frame / Math.max(1, timeline.total)})`, opacity: currentScene >= 0 ? 1 : 0 }} />
-          </div>
-        </div>
+          <Transport
+            player={playerRef}
+            frame={frame}
+            total={timeline.total}
+            fps={project.fps}
+            playing={playing}
+            muted={muted}
+            scenes={timeline.scenes}
+            current={curIdx}
+            onScrub={() => setSelectedEl(null)}
+          />
+        </main>
 
-        <div className="inspector">
-          <div className="tabs">
-            {(
-              [
-                ['scene', `シーン ${sel + 1}`],
-                ['brand', 'ブランド'],
-                ['cast', 'キャラ・声'],
-                ['audio', '音・設定'],
-              ] as const
-            ).map(([k, l]) => (
-              <button key={k} className={tab === k ? 'on' : ''} onClick={() => setTab(k)}>
-                {l}
-              </button>
-            ))}
+        <aside className="inspector">
+          <div className="inspector-head">
+            <Seg
+              block
+              value={tab}
+              onChange={setTab}
+              options={[
+                { value: 'scene', label: 'シーン' },
+                { value: 'design', label: 'デザイン' },
+                { value: 'cast', label: 'キャスト' },
+                { value: 'sound', label: 'サウンド' },
+              ]}
+            />
           </div>
-          <div className="scroll">
-            {tab === 'scene' && selScene ? <SceneInspector project={project} index={sel} update={update} timing={timeline.scenes[sel]} runJob={runJob} onSelectElement={(id) => { setEditing(true); setSelectedEl(id); playerRef.current?.pause(); }} /> : null}
-            {tab === 'brand' ? <BrandPanel project={project} update={update} /> : null}
+          <div className="inspector-body">
+            {tab === 'scene' ? (
+              <SceneInspector project={project} index={sel} update={update} timing={timeline.scenes[sel]} runJob={runJob} onSelectElement={selectElement} />
+            ) : null}
+            {tab === 'design' ? <BrandPanel project={project} update={update} /> : null}
             {tab === 'cast' ? <CastPanel project={project} update={update} runJob={runJob} flush={flush} /> : null}
-            {tab === 'audio' ? <AudioPanel project={project} update={update} runJob={runJob} onSelectScene={selectScene} /> : null}
+            {tab === 'sound' ? <AudioPanel project={project} update={update} runJob={runJob} onSelectScene={selectScene} /> : null}
           </div>
-        </div>
+        </aside>
       </div>
 
       {job ? (
-        <div className="modal-bg">
-          <div className="modal">
-            <h3>{job.label}</h3>
-            <div className="muted">{job.job?.message ?? '開始しています'}</div>
-            <Progress value={job.job?.progress ?? 0.02} />
-            <div className="faint">完了すると自動でプレビューに反映されます。</div>
+        <Sheet>
+          <div className="hstack" style={{ gap: 12 }}>
+            <div className="spinner" />
+            <h3 style={{ margin: 0 }}>{job.label}</h3>
           </div>
-        </div>
+          <div className="sheet-text" style={{ margin: '10px 0 0' }}>
+            {job.job?.message ?? '準備しています'}
+          </div>
+          <Progress value={job.job?.progress ?? 0.02} />
+          <div className="caption">終わると自動でプレビューに反映されます</div>
+        </Sheet>
       ) : null}
       {jobErr ? (
-        <div className="toast" onClick={() => setJobErr(null)} style={{ color: 'var(--danger)', cursor: 'pointer', whiteSpace: 'pre-wrap', maxWidth: '80vw' }}>
-          {jobErr}（クリックで閉じる）
+        <div className="toast" role="alert">
+          <span className="danger-text" style={{ display: 'inline-flex', marginTop: 2 }}>
+            <Ic n={CircleAlert} size={16} mr={0} />
+          </span>
+          <span style={{ flex: 1 }}>{jobErr}</span>
+          <button className="icon-btn sm" onClick={() => setJobErr(null)} title="閉じる">
+            <Ic n={X} size={14} mr={0} />
+          </button>
         </div>
       ) : null}
       {dialog === 'render' ? <RenderDialog project={project} onClose={() => setDialog(null)} staleCount={staleCount} missingShots={missingShots} /> : null}
@@ -605,7 +632,7 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
           onClose={() => setDialog(null)}
           onSubmit={async (instruction) => {
             setDialog(null);
-            await runJob('AIが台本を修正しています', `/api/projects/${project.id}/ai/revise`, { instruction });
+            await runJob('AIが台本を直しています', `/api/projects/${project.id}/ai/revise`, { instruction });
           }}
         />
       ) : null}

@@ -217,7 +217,7 @@ export const SpeechBubble: React.FC<{
             borderRadius: '50%',
             background: '#ffb020',
             border: `${hs * 0.14}px solid #fff`,
-            boxShadow: '0 0 0 2px #7c5cff',
+            boxShadow: '0 0 0 2px #0a84ff',
             boxSizing: 'border-box',
             cursor: 'crosshair',
             touchAction: 'none',
