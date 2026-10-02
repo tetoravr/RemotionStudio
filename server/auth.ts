@@ -8,7 +8,7 @@ import { config } from './env';
  *
  * 必要な環境変数:
  *   GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET … Google Cloud の OAuth クライアント（ウェブアプリケーション）
- *   AUTH_ALLOWED_DOMAINS … 許可するドメイン（カンマ区切り。例: tetoravr.com）
+ *   AUTH_ALLOWED_DOMAINS … 許可するドメイン（カンマ区切り。例: sushitopmarketing.com）
  *   AUTH_ALLOWED_EMAILS  … ドメイン外で個別に許可するメールアドレス（任意・カンマ区切り）
  *   PUBLIC_URL           … 公開URL（例: https://studio.example.com）。Google のリダイレクトURIは <PUBLIC_URL>/auth/callback
  *                          （Render では省略可。RENDER_EXTERNAL_URL を使う）
