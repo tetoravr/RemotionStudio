@@ -7,6 +7,7 @@ import { confirmDialog, errorDialog } from '../components/Dialogs';
 import { MenuItem, Popover, Sheet } from '../components/Fields';
 import { Ic } from '../icons';
 import { withBase } from '../base';
+import { APP_VERSION, BUILD_DATE } from '../version';
 
 /** 「今日 14:32」「昨日」「9月28日」のような短い日時 */
 const when = (iso?: string) => {
@@ -220,6 +221,11 @@ export const Home: React.FC = () => {
         <div className="wordmark">
           <img className="logo" src={withBase('/brand/logo.png')} alt="" />
           Video Creator
+          {APP_VERSION ? (
+            <span className="app-version" title={BUILD_DATE ? `ビルド: ${BUILD_DATE}` : undefined}>
+              v{APP_VERSION}
+            </span>
+          ) : null}
         </div>
         <span className="spacer" />
         <UserMenu />
