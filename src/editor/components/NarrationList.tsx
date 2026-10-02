@@ -4,53 +4,58 @@ import { isAudioStale } from '../../video/narrationKey';
 import type { Project } from '../../video/schema';
 import { ttsFor } from '../api';
 import { MetaContext } from '../App';
-import { useVoice } from '../voice';
+import { stopPreview, useVoice } from '../voice';
 import { Ic } from '../icons';
 import { confirmDialog } from './Dialogs';
 import { MenuItem, Popover } from './Fields';
 import { Avatar, speakerName } from './pickers';
-import { withBase } from '../base';
 
-/** セリフ音声の再生（1つずつ／通し）。再生中のセリフIDを返す */
-export const useNarrationPlayer = (project: Project) => {
-  const audio = useRef<HTMLAudioElement | null>(null);
+/**
+ * セリフ音声の再生（1つずつ／通し）。再生中のセリフIDを返す。
+ * 鳴らすのは画面共通の試聴（ほかのセリフの試聴・動画の再生とは重ならない）
+ */
+export const useNarrationPlayer = () => {
+  const voice = useVoice();
   const run = useRef(0);
   const [playing, setPlaying] = useState<string | null>(null);
 
   const stop = useCallback(() => {
     run.current++;
-    audio.current?.pause();
-    audio.current = null;
+    stopPreview();
     setPlaying(null);
   }, []);
 
-  useEffect(() => stop, [stop]);
-
-  const playOne = useCallback(
-    (id: string, src: string) =>
-      new Promise<void>((resolve) => {
-        const a = new Audio(withBase(`/files/${project.id}/${src}?t=${Date.now()}`));
-        audio.current = a;
-        setPlaying(id);
-        a.onended = () => resolve();
-        a.onerror = () => resolve();
-        a.play().catch(() => resolve());
-      }),
-    [project.id],
+  // 閉じた時、ここで鳴らしていたら止める
+  const playingRef = useRef<string | null>(null);
+  playingRef.current = playing;
+  useEffect(
+    () => () => {
+      run.current++;
+      if (playingRef.current) stopPreview();
+    },
+    [],
   );
 
-  /** ids の順に再生する（音声がないセリフは飛ばす） */
+  /** ids の順に再生する */
   const play = useCallback(
-    async (items: { id: string; src: string }[]) => {
-      audio.current?.pause();
+    (items: { id: string; src: string }[]) => {
+      if (!voice) return;
       const me = ++run.current;
-      for (const it of items) {
+      const next = (i: number) => {
         if (run.current !== me) return;
-        await playOne(it.id, it.src);
-      }
-      if (run.current === me) setPlaying(null);
+        const it = items[i];
+        if (!it) return setPlaying(null);
+        setPlaying(it.id);
+        voice.preview(it.src, (finished) => {
+          if (run.current !== me) return;
+          // ほかの試聴・動画の再生で止められた時は、通しの再生もやめる
+          if (finished) next(i + 1);
+          else setPlaying(null);
+        });
+      };
+      next(0);
     },
-    [playOne],
+    [voice],
   );
 
   return { playing, play, stop };
@@ -61,21 +66,21 @@ export const NarrationList: React.FC<{ project: Project; onSelectScene?: (i: num
   const meta = useContext(MetaContext)!;
   const tts = ttsFor(meta, project.audio);
   const voice = useVoice();
-  const { playing, play, stop } = useNarrationPlayer(project);
+  const { playing, play, stop } = useNarrationPlayer();
 
   const rows = project.scenes.flatMap((s, si) =>
     s.lines.filter((l) => l.text.trim() || l.speak?.trim()).map((l) => ({ scene: si, line: l, stale: isAudioStale(l, project.cast, tts.engine) })),
   );
-  const playable = rows.filter((r) => r.line.audio).map((r) => ({ id: r.line.id, src: r.line.audio!.src }));
+  // 内容を変えてまだ作り直していないセリフは、前の音声を鳴らさずに飛ばす
+  const playable = rows.filter((r) => r.line.audio && !voice?.outdated.has(r.line.id)).map((r) => ({ id: r.line.id, src: r.line.audio!.src }));
   const staleCount = rows.filter((r) => r.stale).length;
 
   /** このセリフだけ作り直して、すぐ聴く */
   const redo = async (id: string) => {
     if (!voice) return;
     stop();
-    await voice.request([id], { force: true });
-    const src = voice.audioOf(id);
-    if (src) play([{ id, src }]);
+    const made = await voice.request([id], { force: true });
+    if (made[id]) play([{ id, src: made[id] }]);
   };
   const busy = Boolean(voice?.running.size);
 
@@ -129,7 +134,7 @@ export const NarrationList: React.FC<{ project: Project; onSelectScene?: (i: num
         <div key={line.id} className={`narr-row ${playing === line.id ? 'playing' : ''}`}>
           <button
             className="icon-btn sm round"
-            title={line.audio ? '再生' : '音声がありません'}
+            title={line.audio ? (stale ? '前の音声を再生（今のセリフとは違います）' : '再生') : '音声がありません'}
             disabled={!line.audio}
             onClick={() => (playing === line.id ? stop() : play([{ id: line.id, src: line.audio!.src }]))}
           >

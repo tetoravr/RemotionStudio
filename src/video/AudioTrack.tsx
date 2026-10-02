@@ -6,7 +6,7 @@ import type { Timeline } from './timeline';
 
 export const DEFAULT_BGM = 'audio/bgm-pop.mp3';
 
-export const AudioTrack: React.FC<{ timeline: Timeline }> = ({ timeline }) => {
+export const AudioTrack: React.FC<{ timeline: Timeline; mutedLines?: string[] }> = ({ timeline, mutedLines }) => {
   const { project, resolveAsset } = useTheme();
   const { fps, durationInFrames } = useVideoConfig();
   const a = project.audio;
@@ -46,9 +46,10 @@ export const AudioTrack: React.FC<{ timeline: Timeline }> = ({ timeline }) => {
       {a.narration
         ? timeline.scenes.flatMap((st) =>
             st.lines
-              .filter((lt) => lt.line.audio)
+              .filter((lt) => lt.line.audio && !mutedLines?.includes(lt.line.id))
               .map((lt) => (
-                <Sequence key={`${st.scene.id}-${lt.line.id}`} from={st.start + lt.start} durationInFrames={Math.max(1, lt.end - lt.start + 6)} layout="none">
+                // 音声が変わったら作り直す（同じ要素の src だけを差し替えると、前の音声が鳴り続けることがある）
+                <Sequence key={`${st.scene.id}-${lt.line.id}-${lt.line.audio!.src}`} from={st.start + lt.start} durationInFrames={Math.max(1, lt.end - lt.start + 6)} layout="none">
                   <Audio src={resolveAsset(lt.line.audio!.src)!} volume={a.narrationVolume} acceptableTimeShiftInSeconds={1} />
                 </Sequence>
               )),

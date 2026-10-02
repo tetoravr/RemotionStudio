@@ -17,7 +17,7 @@ import { adaptForFormat } from '../src/video/adapt';
 import { collectSfx } from '../src/video/events';
 import { applyTextTarget, layerOrder, migrateLayouts, moveLayer, normalizeAdjust, readAdjust, sceneElementIds, sceneLayout, setLayerOrder, setSceneLayout } from '../src/video/edit/textEdit';
 import { autoTags, elevenVoiceKey, lineTags, normalizeTag, standardRefVoice, stripAudioTags, withAudioTags } from '../src/video/audioTags';
-import { elevenSpeechText, engineKey, irodoriCaption, isAudioStale, narrationHash, plainSpeechText, speechText, voiceFor } from '../src/video/narrationKey';
+import { carryAudio, elevenSpeechText, engineKey, irodoriCaption, isAudioStale, narrationHash, plainSpeechText, speechText, voiceFor } from '../src/video/narrationKey';
 import { Project } from '../src/video/schema';
 import { blankProject, DEFAULT_CAST } from '../src/video/templates';
 import { computeTimeline, lineDurationSec } from '../src/video/timeline';
@@ -739,4 +739,24 @@ test('レイヤー: 並べ替え・最前面・最背面は、その画面の形
   moveLayer(sc, 'vertical', 'headline', 'front');
   assert.equal(readAdjust(sc, 'headline', 'vertical').dx, 40);
   assert.equal(layerOrder(sc, 'vertical').at(-1), 'headline');
+});
+
+test('元に戻す: 戻した内容に合う音声が今・履歴にあれば引き継ぐ（作り直した音声が前の音声に戻らない）', () => {
+  const engine = 'elevenlabs:eleven_v4';
+  const p0 = Project.parse(structuredClone(sample));
+  const line = (p: Project) => p.scenes.flatMap((s) => s.lines).find((l) => l.text.trim())!;
+  const hashOf = (p: Project) => narrationHash(line(p), voiceFor(line(p).speaker, p.cast), engine);
+  // p0: 古い音声 → p1: 文を変えた（まだ古い音声）→ p2: ほかを変えた → 作り直し（新しい音声）→ 元に戻すで p1 に戻る
+  line(p0).audio = { src: 'audio/old.wav', durationSec: 1, hash: 'old' };
+  const p1 = structuredClone(p0);
+  line(p1).text = '書き換えたセリフ';
+  const p2 = structuredClone(p1);
+  p2.title = '別の変更';
+  line(p2).audio = { src: 'audio/new.wav', durationSec: 1.2, hash: hashOf(p2) };
+  const back = carryAudio(p1, [p2, p0], engine);
+  assert.equal(line(back).audio?.src, 'audio/new.wav');
+  assert.equal(line(p1).audio?.src, 'audio/old.wav', 'does not mutate the history entry');
+  // 文も元に戻した時は、その文の音声（前の音声）のまま
+  line(p0).audio!.hash = hashOf(p0);
+  assert.equal(line(carryAudio(p0, [p2], engine)).audio?.src, 'audio/old.wav');
 });

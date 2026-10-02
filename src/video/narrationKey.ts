@@ -1,5 +1,5 @@
 import { elevenSettings, elevenVoiceKey, lineTags, standardRefVoice, stripAudioTags, withAudioTags, type VoiceWithLibrary } from './audioTags';
-import { DEFAULT_VOICE_SPEED, type AudioSettings, type CastMember, type Line } from './schema';
+import { DEFAULT_VOICE_SPEED, type AudioSettings, type CastMember, type Line, type Project } from './schema';
 
 /** 53bit の軽量ハッシュ（サーバー・エディター共通で使う） */
 const cyrb53 = (str: string, seed = 0) => {
@@ -78,3 +78,25 @@ export const engineKey = (engine: string, audio?: Pick<AudioSettings, 'elevenSta
 
 export const isAudioStale = (line: Line, cast: CastMember[], engine: string) =>
   Boolean(plainSpeechText(line).trim()) && (!line.audio || line.audio.hash !== narrationHash(line, voiceFor(line.speaker, cast), engine));
+
+/**
+ * 元に戻す／やり直すで戻した内容に、作った音声を引き継ぐ。
+ * 履歴には作り直す前の音声が残っているので、そのまま戻すと、作り直した音声が前の音声に戻ってしまう。
+ * 戻した各セリフについて、今の内容に合う音声がほかの状態（今・履歴）にあれば、それを使う。
+ */
+export const carryAudio = (target: Project, sources: Project[], engine: string): Project => {
+  const found = new Map<string, NonNullable<Line['audio']>>();
+  for (const p of sources) for (const s of p.scenes) for (const l of s.lines) if (l.audio) found.set(`${l.id}:${l.audio.hash}`, l.audio);
+  let out: Project | null = null;
+  target.scenes.forEach((s, si) =>
+    s.lines.forEach((l, li) => {
+      const want = narrationHash(l, voiceFor(l.speaker, target.cast), engine);
+      if (l.audio?.hash === want) return;
+      const a = found.get(`${l.id}:${want}`);
+      if (!a) return;
+      out ??= structuredClone(target);
+      out.scenes[si].lines[li].audio = a;
+    }),
+  );
+  return out ?? target;
+};
