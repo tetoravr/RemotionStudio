@@ -111,7 +111,7 @@ const LineCard: React.FC<{
   // 詳細は最初から開いておく（閉じることもできる）
   const [open, setOpen] = useState(true);
   const scene = project.scenes[index];
-  const tts = ttsFor(meta, project.audio.ttsProvider);
+  const tts = ttsFor(meta, project.audio);
   const narration = project.audio.narration;
   const stale = isAudioStale(l, project.cast, tts.engine);
   const setLine = (patch: Partial<Line>) => update((p) => void Object.assign(p.scenes[index].lines[li], patch));

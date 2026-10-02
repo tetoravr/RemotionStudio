@@ -1,4 +1,4 @@
-import type { TtsProvider } from '../video/narrationKey';
+import { engineKey, type TtsProvider } from '../video/narrationKey';
 import type { Project } from '../video/schema';
 
 export type Meta = {
@@ -26,8 +26,8 @@ export type Meta = {
 
 export const ENGINE_NAMES: Record<TtsProvider, string> = { elevenlabs: 'ElevenLabs', irodori: 'Irodori-TTS', openai: 'OpenAI TTS' };
 
-/** 実際に使う音声エンジンと ID。エンジンはサーバーの設定で決まる（既定は ElevenLabs） */
-export const ttsFor = (meta: Meta, _setting?: Project['audio']['ttsProvider']) => {
+/** 実際に使う音声エンジンと ID。エンジンはサーバーの設定で決まる（既定は ElevenLabs）。engine は音声の同一性に使う */
+export const ttsFor = (meta: Meta, audio?: Project['audio']) => {
   const provider = meta.tts.default;
   const ready = provider === 'elevenlabs' ? meta.tts.elevenlabs.online : provider === 'irodori' ? meta.tts.irodori.online : meta.openai;
   /** つながらない時の理由（画面に出す） */
@@ -39,7 +39,7 @@ export const ttsFor = (meta: Meta, _setting?: Project['audio']['ttsProvider']) =
       : provider === 'irodori'
         ? '音声エンジン（Irodori-TTS）に接続できません'
         : 'OpenAI の API キーが未設定です';
-  return { provider, engine: meta.tts.engines[provider], ready, name: ENGINE_NAMES[provider], problem };
+  return { provider, engine: engineKey(meta.tts.engines[provider], audio), ready, name: ENGINE_NAMES[provider], problem };
 };
 
 export type ElevenVoice = { id: string; name: string; description?: string; previewUrl?: string; publicOwnerId?: string; tags: string[] };
@@ -142,7 +142,7 @@ export const api = {
     fd.append('file', file);
     return fetch('/api/tts/eleven/clone', { method: 'POST', body: fd }).then((r) => json<{ voiceId: string; name: string }>(r));
   },
-  ttsPreview: async (text: string, voice: Project['cast'][number]['voice'], opts: { delivery?: string; emoji?: string; tags?: string[] } = {}) => {
+  ttsPreview: async (text: string, voice: Project['cast'][number]['voice'], opts: { delivery?: string; emoji?: string; tags?: string[]; stability?: string } = {}) => {
     const r = await fetch('/api/tts/preview', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, voice, ...opts }) });
     if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || '試聴に失敗しました');
     return URL.createObjectURL(await r.blob());

@@ -1,5 +1,5 @@
-import { elevenSettings, elevenVoiceKey, lineTags, stripAudioTags, withAudioTags, type VoiceWithLibrary } from './audioTags';
-import { DEFAULT_VOICE_SPEED, type CastMember, type Line } from './schema';
+import { elevenSettings, elevenVoiceKey, lineTags, standardRefVoice, stripAudioTags, withAudioTags, type VoiceWithLibrary } from './audioTags';
+import { DEFAULT_VOICE_SPEED, type AudioSettings, type CastMember, type Line } from './schema';
 
 /** 53bit の軽量ハッシュ（サーバー・エディター共通で使う） */
 const cyrb53 = (str: string, seed = 0) => {
@@ -44,8 +44,8 @@ export const isIrodoriEngine = (engine: string) => engine.startsWith('irodori');
 export const isElevenEngine = (engine: string) => engine.startsWith('elevenlabs');
 
 /** Irodori-TTS に渡す声の指定。参照音声があるときはキャプションと衝突しやすいので、キャプションは感情の指示だけにする */
-export const irodoriCaption = (voice: CastMember['voice'], delivery?: string) => {
-  const base = voice.refVoice ? '' : (voice.caption || voice.instructions || '').trim();
+export const irodoriCaption = (voice: VoiceWithLibrary, delivery?: string) => {
+  const base = standardRefVoice(voice) ? '' : (voice.caption || voice.instructions || '').trim();
   const d = delivery?.trim() ? `このセリフは「${delivery.trim().replace(/[。.]$/, '')}」という調子で読む。` : '';
   return [base, d].filter(Boolean).join('\n');
 };
@@ -57,16 +57,24 @@ export const irodoriCaption = (voice: CastMember['voice'], delivery?: string) =>
 export const narrationHash = (line: Line, voice: CastMember['voice'], engine: string) => {
   if (isElevenEngine(engine)) {
     const e = elevenSettings(voice);
-    return cyrb53(JSON.stringify([elevenSpeechText(line), elevenVoiceKey(voice), e.speed, e.stability, engine]));
+    return cyrb53(JSON.stringify([elevenSpeechText(line), elevenVoiceKey(voice), e.speed, engine]));
   }
   return cyrb53(
     JSON.stringify(
       isIrodoriEngine(engine)
-        ? [plainSpeechText(line), line.emoji ?? '', irodoriCaption(voice, line.delivery), voice.seed ?? null, voice.refVoice ?? '', voice.speed, engine]
+        ? // ライブラリのキャラは、参照音声が未設定でもそのキャラの標準の声で読む（行ごとに声が変わらないように）
+          [plainSpeechText(line), line.emoji ?? '', irodoriCaption(voice, line.delivery), voice.seed ?? null, standardRefVoice(voice) ?? '', voice.speed, engine]
         : [plainSpeechText(line), line.delivery ?? '', voice.voice, voice.instructions, voice.speed, engine],
     ),
   );
 };
+
+/**
+ * 音声の同一性に入れるエンジンの識別子。ElevenLabs は表現の幅（プロジェクト共通）も含める。
+ * エディターとサーバーの両方で、この値を narrationHash / isAudioStale に渡す
+ */
+export const engineKey = (engine: string, audio?: Pick<AudioSettings, 'elevenStability'>) =>
+  isElevenEngine(engine) ? `${engine}|${audio?.elevenStability ?? 'natural'}` : engine;
 
 export const isAudioStale = (line: Line, cast: CastMember[], engine: string) =>
   Boolean(plainSpeechText(line).trim()) && (!line.audio || line.audio.hash !== narrationHash(line, voiceFor(line.speaker, cast), engine));

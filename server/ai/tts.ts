@@ -2,8 +2,8 @@ import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { stripAudioTags } from '../../src/video/audioTags';
-import { elevenSpeechText, irodoriCaption, narrationHash, plainSpeechText, type TtsProvider } from '../../src/video/narrationKey';
+import { standardRefVoice, stripAudioTags, type VoiceWithLibrary } from '../../src/video/audioTags';
+import { elevenSpeechText, engineKey, irodoriCaption, narrationHash, plainSpeechText, type TtsProvider } from '../../src/video/narrationKey';
 import type { AudioSettings, CastMember, Line } from '../../src/video/schema';
 import { config } from '../env';
 import { runFfmpeg, wavDurationSec } from '../ffmpeg';
@@ -50,7 +50,9 @@ export const engineId = (provider: TtsProvider) =>
 /** エンジンに送る読み上げ文。ElevenLabs はタグ付き、ほかはタグを外す */
 export const ttsText = (line: Line, provider: TtsProvider) => (provider === 'elevenlabs' ? elevenSpeechText(line) : plainSpeechText(line));
 
-export const lineHash = (line: Line, voice: CastMember['voice'], provider: TtsProvider) => narrationHash(line, voice, engineId(provider));
+/** セリフ音声の同一性キー（ElevenLabs はプロジェクトの表現の幅も含める） */
+export const lineHash = (line: Line, voice: CastMember['voice'], provider: TtsProvider, audio?: Pick<AudioSettings, 'elevenStability'>) =>
+  narrationHash(line, voice, engineKey(engineId(provider), audio));
 
 export const irodoriBase = () => config.tts.irodoriUrl || IRODORI_FALLBACK_URL;
 /** json=false は multipart 送信用（Content-Type は fetch に任せる） */
@@ -332,6 +334,8 @@ export type SynthOptions = {
   provider?: TtsProvider;
   /** 乱数シードを上書きする（崩れた音声を作り直す時に使う） */
   seed?: number;
+  /** ElevenLabs の表現の幅（プロジェクト共通） */
+  stability?: AudioSettings['elevenStability'];
 };
 
 /** 読み上げる文字数（記号・空白・オーディオタグを除く） */
@@ -384,7 +388,7 @@ export const irodoriDurationScale = (speed: number) => {
 };
 
 /** Irodori-TTS（OpenAI 互換サーバー）: 48kHz の WAV。声はキャプション（声のデザイン）＋固定シード、または参照音声で決める */
-const synthIrodori = async (text: string, voice: CastMember['voice'], opts: SynthOptions) => {
+const synthIrodori = async (text: string, voice: VoiceWithLibrary, opts: SynthOptions) => {
   const caption = irodoriCaption(voice, opts.delivery);
   const irodori: Record<string, unknown> = {};
   if (caption) irodori.caption = caption;
@@ -394,7 +398,8 @@ const synthIrodori = async (text: string, voice: CastMember['voice'], opts: Synt
   // 話速はモデル自身に任せる（時間を伸縮するより自然）。1 より小さいほど速く話す
   const speed = voice.speed || 1;
   if (Math.abs(speed - 1) >= 0.03) irodori.duration_scale = irodoriDurationScale(speed);
-  const refVoice = voice.refVoice || 'none';
+  // ライブラリのキャラは、参照音声が未設定でもそのキャラの標準の声で読む（セリフごとに声が変わらないように）
+  const refVoice = standardRefVoice(voice) || 'none';
   await ensureVoice(refVoice);
   const request = () =>
     fetch(`${irodoriBase()}/v1/audio/speech`, {
@@ -486,11 +491,15 @@ export const voiceEqFor = async (refVoice: string | undefined): Promise<number[]
   return calibrating.get(refVoice)!;
 };
 
-export const synthesizeToFile = async (text: string, voice: CastMember['voice'], out: string, opts: SynthOptions = {}) => {
+export const synthesizeToFile = async (text: string, voice: VoiceWithLibrary, out: string, opts: SynthOptions = {}) => {
   const outFile = path.resolve(out);
   const provider = opts.provider ?? resolveProvider();
   const synth = (o: SynthOptions) =>
-    provider === 'elevenlabs' ? synthEleven(text, voice, { seed: o.seed }) : provider === 'irodori' ? synthIrodori(text, voice, o) : synthOpenAI(text, voice, o.delivery);
+    provider === 'elevenlabs'
+      ? synthEleven(text, voice, { seed: o.seed, stability: o.stability })
+      : provider === 'irodori'
+        ? synthIrodori(text, voice, o)
+        : synthOpenAI(text, voice, o.delivery);
   const { samples: raw, rate } = await synth(opts);
   if (!raw.length) throw new Error('音声が空でした');
   let cleaned = trimAndNormalize(raw, rate);
@@ -516,12 +525,15 @@ export const synthesizeToFile = async (text: string, voice: CastMember['voice'],
     }
   }
   // 話速はどのエンジンも生成時に反映済み（ElevenLabs は speed と伸縮、Irodori は duration_scale、OpenAI は speed）
-  await fs.mkdir(path.dirname(outFile), { recursive: true });
   // 参照音声の声は、コーデックで弱まった高い音域を参照音声に合わせて戻す
-  const gains = provider === 'irodori' ? await voiceEqFor(voice.refVoice) : null;
-  const finalSamples = gains ? applyEq(cleaned, rate, gains) : cleaned;
-  const wav = encodeWav(finalSamples, rate);
+  const gains = provider === 'irodori' ? await voiceEqFor(standardRefVoice(voice)) : null;
+  return saveSpeech(gains ? applyEq(cleaned, rate, gains) : cleaned, rate, outFile);
+};
+
+/** 整えた音声を WAV で保存し、長さと口パクのデータを返す */
+export const saveSpeech = async (samples: Float32Array, rate: number, outFile: string) => {
+  await fs.mkdir(path.dirname(outFile), { recursive: true });
+  const wav = encodeWav(samples, rate);
   await fs.writeFile(outFile, wav);
-  const parsed = { samples: finalSamples, rate };
-  return { durationSec: wavDurationSec(wav), mouth: mouthEnvelope(parsed.samples, parsed.rate) };
+  return { durationSec: wavDurationSec(wav), mouth: mouthEnvelope(samples, rate) };
 };

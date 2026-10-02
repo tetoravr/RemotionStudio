@@ -1,5 +1,6 @@
 import { Music } from 'lucide-react';
 import React, { useContext } from 'react';
+import { ELEVEN_STABILITY } from '../../video/audioTags';
 import type { Project } from '../../video/schema';
 import { api, ttsFor } from '../api';
 import { MetaContext } from '../App';
@@ -11,7 +12,7 @@ import { NarrationList } from './NarrationList';
 export const AudioPanel: React.FC<{ project: Project; update: Update; runJob: RunJob; onSelectScene?: (i: number) => void }> = ({ project, update, runJob, onSelectScene }) => {
   const a = project.audio;
   const meta = useContext(MetaContext)!;
-  const tts = ttsFor(meta, a.ttsProvider);
+  const tts = ttsFor(meta, a);
   const ir = meta.tts.irodori;
   const el = meta.tts.elevenlabs;
   const engineSub =
@@ -53,6 +54,15 @@ export const AudioPanel: React.FC<{ project: Project; update: Update; runJob: Ru
               {tts.ready ? '接続中' : tts.provider === 'elevenlabs' && !el.configured ? 'キー未設定' : '未接続'}
             </span>
           </Cell>
+          {tts.provider === 'elevenlabs' ? (
+            <Cell label="表現の幅" sub="豊かなほどタグの気持ちが強く出ます（まれに読み方が崩れます）">
+              <Seg
+                value={a.elevenStability}
+                onChange={(v) => update((p) => void (p.audio.elevenStability = v))}
+                options={(['robust', 'natural', 'creative'] as const).map((v) => ({ value: v, label: ELEVEN_STABILITY[v].label }))}
+              />
+            </Cell>
+          ) : null}
           <Cell label="音量" stack>
             <Slider value={a.narrationVolume} min={0} max={1} disabled={!a.narration} onChange={(v) => update((p) => void (p.audio.narrationVolume = v))} />
           </Cell>
@@ -65,7 +75,11 @@ export const AudioPanel: React.FC<{ project: Project; update: Update; runJob: Ru
       {a.narration ? (
         <Section
           title="セリフの音声"
-          footer={tts.provider === 'elevenlabs' ? 'セリフごとの「声の調子」のタグ（ワクワク・驚き・ため息など）で、気持ちを乗せて読み上げます' : undefined}
+          footer={
+            tts.provider === 'elevenlabs'
+              ? '台本全体を1回で読み上げてからセリフごとに分けるので、シーンが変わっても同じキャラは同じ声のままです（セリフを1つでも変えると全体を読み直します）。気持ちはセリフごとの「声の調子」のタグで乗せます'
+              : undefined
+          }
         >
           <NarrationList project={project} runJob={runJob} onSelectScene={onSelectScene} />
         </Section>

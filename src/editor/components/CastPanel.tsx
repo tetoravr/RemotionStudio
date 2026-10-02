@@ -52,7 +52,7 @@ const CastCard: React.FC<{ project: Project; member: CastMember; index: number; 
   const [voiceOpen, setVoiceOpen] = useState(false);
   const [previewing, setPreviewing] = useState<'loading' | 'playing' | null>(null);
   const audio = useRef<HTMLAudioElement | null>(null);
-  const tts = ttsFor(meta, project.audio.ttsProvider);
+  const tts = ttsFor(meta, project.audio);
   const fixed = Boolean(c.voice.refVoice);
   const refLabel = c.voice.refVoice ? meta.tts.irodori.labels?.[c.voice.refVoice] ?? c.voice.refVoice : '';
 
@@ -77,6 +77,7 @@ const CastCard: React.FC<{ project: Project; member: CastMember; index: number; 
         delivery: line?.delivery,
         emoji: line?.emoji,
         tags: line ? lineTags(line) : ['cheerfully'],
+        stability: project.audio.elevenStability,
       });
       audio.current?.pause();
       const a = new Audio(url);

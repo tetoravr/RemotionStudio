@@ -5,7 +5,7 @@ import path from 'node:path';
 import { ELEVEN_STABILITY, elevenSettings, standardRefVoice, type VoiceWithLibrary } from '../../src/video/audioTags';
 import { config } from '../env';
 import { runFfmpeg } from '../ffmpeg';
-import { readWavSamples } from './tts';
+import { encodeWav, readWavSamples } from './tts';
 import { localVoiceFile, localVoices } from './voices';
 
 /**
@@ -137,40 +137,116 @@ const decode = async (audio: Buffer, tempo = 1, ext = '.mp3') => {
   }
 };
 
+type Stability = keyof typeof ELEVEN_STABILITY;
+
+/** 速さだけを変える（音程はそのまま）。全体を1回で読んだ音声を、キャラごとの速さに合わせるのに使う */
+const stretch = async (samples: Float32Array, rate: number, tempo: number) => {
+  if (Math.abs(tempo - 1) < 0.01) return { samples, rate };
+  return decode(encodeWav(samples, rate), tempo, '.wav');
+};
+
+/** 言語の指定・自動で用意した声が原因の失敗は、1回だけ条件を変えてやり直す */
+const withRetries = async <T>(voices: VoiceWithLibrary[], run: (withLanguage: boolean) => Promise<T>): Promise<T> => {
+  try {
+    return await run(true);
+  } catch (err) {
+    const x = err as ElevenErr & { detail?: string };
+    // このモデルが言語の指定を受け付けない時は、指定なしでやり直す
+    if (x.status === 400 && /language/i.test(x.detail ?? x.message)) return run(false);
+    // 自動で用意した声が ElevenLabs 側で消されていたら、作り直して1回だけやり直す
+    const auto = voices.filter((v) => !v.eleven?.voiceId);
+    if ((x.status === 404 || x.code === 'voice_not_found') && auto.length) {
+      for (const v of auto) await forgetAutoVoice(v);
+      return run(true);
+    }
+    throw err;
+  }
+};
+
 /**
- * セリフを読み上げる。text には先頭のタグ（[excited] など）を含めて渡す。
+ * セリフを1つ読み上げる（試聴・1セリフだけの作り直しの予備）。text には先頭のタグ（[excited] など）を含めて渡す。
  * 話速は 0.7〜1.2 の範囲は ElevenLabs 側で、はみ出した分は生成後に伸縮する
  */
-export const synthEleven = async (text: string, voice: VoiceWithLibrary, opts: { seed?: number } = {}) => {
+export const synthEleven = async (text: string, voice: VoiceWithLibrary, opts: { seed?: number; stability?: Stability } = {}) => {
   const e = elevenSettings(voice);
   const model = config.eleven.model;
   const native = nativeSpeedModel(model) ? Math.min(1.2, Math.max(0.7, e.speed)) : 1;
-  const voiceSettings: Record<string, unknown> = { stability: ELEVEN_STABILITY[e.stability].value, similarity_boost: 0.75, use_speaker_boost: true };
+  const voiceSettings: Record<string, unknown> = { stability: ELEVEN_STABILITY[opts.stability ?? 'natural'].value, similarity_boost: 0.75, use_speaker_boost: true };
   if (native !== 1) voiceSettings.speed = native;
-  const request = async (voiceId: string, withLanguage: boolean) => {
+  const mp3 = await withRetries([voice], async (withLanguage) => {
+    const voiceId = await resolveElevenVoice(voice);
     const body: Record<string, unknown> = { text: text.slice(0, MAX_CHARS), model_id: model, voice_settings: voiceSettings };
     if (withLanguage && config.eleven.language) body.language_code = config.eleven.language;
     if (opts.seed != null) body.seed = opts.seed >>> 0;
     const res = await call(`/v1/text-to-speech/${encodeURIComponent(voiceId)}?output_format=${OUTPUT_FORMAT}`, { method: 'POST', body: JSON.stringify(body) });
     return Buffer.from(await res.arrayBuffer());
-  };
-  let voiceId = await resolveElevenVoice(voice);
-  let mp3: Buffer;
-  try {
-    mp3 = await request(voiceId, true);
-  } catch (err) {
-    const x = err as ElevenErr & { detail?: string };
-    if (x.status === 400 && /language/i.test(x.detail ?? x.message)) {
-      // このモデルが言語の指定を受け付けない時は、指定なしでやり直す
-      mp3 = await request(voiceId, false);
-    } else if ((x.status === 404 || x.code === 'voice_not_found') && !voice.eleven?.voiceId) {
-      // 自動で用意した声が ElevenLabs 側で消されていたら、作り直して1回だけやり直す
-      await forgetAutoVoice(voice);
-      voiceId = await resolveElevenVoice(voice);
-      mp3 = await request(voiceId, true);
-    } else throw err;
-  }
+  });
   return decode(mp3, e.speed / native);
+};
+
+/** 1回の読み上げ（Text to Dialogue）に入れる文字数の上限（ElevenLabs の目安は 2,000 文字） */
+export const DIALOGUE_MAX_CHARS = 1800;
+export const DIALOGUE_MAX_VOICES = 10;
+
+export type DialogueInput = { text: string; voice: VoiceWithLibrary };
+
+/**
+ * 複数のセリフを、1回の読み上げ（Text to Dialogue）で作り、セリフごとに切り分けて返す。
+ * セリフを1つずつ作ると、短い文ほど声が揺れて、シーンによって別の人のように聞こえることがある。
+ * 台本をまとめて読ませると、同じキャラは同じ声のまま、掛け合いの間や抑揚も自然につながる。
+ * previousText / futureText は前後の文（読まないが、つながりの手がかりにする）
+ */
+export const synthElevenDialogue = async (
+  inputs: DialogueInput[],
+  opts: { stability?: Stability; previousText?: string; futureText?: string } = {},
+): Promise<{ samples: Float32Array; rate: number }[]> => {
+  if (!inputs.length) return [];
+  const r = await withRetries(
+    inputs.map((x) => x.voice),
+    async (withLanguage) => {
+      const ids: string[] = [];
+      // 同じ声を同時に作らないよう、1つずつ解決する（2回目からは覚えた声を使う）
+      for (const x of inputs) ids.push(await resolveElevenVoice(x.voice));
+      const body: Record<string, unknown> = {
+        inputs: inputs.map((x, i) => ({ text: x.text, voice_id: ids[i] })),
+        model_id: config.eleven.model,
+        settings: { stability: ELEVEN_STABILITY[opts.stability ?? 'natural'].value },
+      };
+      if (withLanguage && config.eleven.language) body.language_code = config.eleven.language;
+      if (opts.previousText) body.previous_text = opts.previousText;
+      if (opts.futureText) body.future_text = opts.futureText;
+      const res = await call(`/v1/text-to-dialogue/with-timestamps?output_format=${OUTPUT_FORMAT}`, { method: 'POST', body: JSON.stringify(body) }, 300_000);
+      return (await res.json()) as {
+        audio_base64?: string;
+        voice_segments?: { start_time_seconds: number; end_time_seconds: number; dialogue_input_index: number }[];
+      };
+    },
+  );
+  if (!r.audio_base64) throw new Error('ElevenLabs から音声が返ってきませんでした');
+  const whole = await decode(Buffer.from(r.audio_base64, 'base64'));
+  // セリフ（dialogue_input_index）ごとの範囲。1つのセリフが複数の区間に分かれることもあるので、まとめる
+  const spans = new Map<number, { start: number; end: number }>();
+  for (const seg of r.voice_segments ?? []) {
+    const cur = spans.get(seg.dialogue_input_index);
+    spans.set(seg.dialogue_input_index, cur ? { start: Math.min(cur.start, seg.start_time_seconds), end: Math.max(cur.end, seg.end_time_seconds) } : { start: seg.start_time_seconds, end: seg.end_time_seconds });
+  }
+  if (inputs.some((_, i) => !spans.has(i))) throw Object.assign(new Error('ElevenLabs の読み上げを、セリフごとに切り分けられませんでした'), { status: 422 });
+  const order = inputs.map((_, i) => i).sort((a, b) => spans.get(a)!.start - spans.get(b)!.start);
+  const total = whole.samples.length / whole.rate;
+  const out: { samples: Float32Array; rate: number }[] = new Array(inputs.length);
+  for (let k = 0; k < order.length; k++) {
+    const i = order[k];
+    const sp = spans.get(i)!;
+    const prevEnd = k > 0 ? spans.get(order[k - 1])!.end : 0;
+    const nextStart = k < order.length - 1 ? spans.get(order[k + 1])!.start : total;
+    // 少しだけ余白を付けて切る（前後のセリフの声が入らない範囲で）。無音は後で整える
+    const a = Math.max(prevEnd, sp.start - 0.04);
+    const b = Math.min(nextStart, sp.end + 0.12, total);
+    const slice = whole.samples.slice(Math.floor(a * whole.rate), Math.max(Math.floor(a * whole.rate) + 1, Math.floor(b * whole.rate)));
+    // ElevenLabs の話速の設定は1回の読み上げ全体にしか効かないので、キャラごとの速さは切り分けたあとで合わせる
+    out[i] = await stretch(slice, whole.rate, elevenSettings(inputs[i].voice).speed);
+  }
+  return out;
 };
 
 /* ---------------- 声の解決（選んでいない時の自動の声） ---------------- */

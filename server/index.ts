@@ -403,7 +403,7 @@ app.post(
 app.post(
   '/api/tts/preview',
   h(async (req, res) => {
-    const { text = 'こんにちは！よろしくね！', voice, delivery, emoji, tags } = req.body ?? {};
+    const { text = 'こんにちは！よろしくね！', voice, delivery, emoji, tags, stability } = req.body ?? {};
     const provider = resolveProvider('auto');
     const plain = String(text).slice(0, 200);
     // ElevenLabs はタグを先頭に付けて読む。タグを読めないエンジンには外して渡す
@@ -417,6 +417,7 @@ app.post(
         delivery: delivery || undefined,
         emoji: emoji || undefined,
         provider,
+        stability: ['creative', 'natural', 'robust'].includes(stability) ? stability : undefined,
       });
       res.type('audio/wav').send(fs.readFileSync(tmp));
     } finally {

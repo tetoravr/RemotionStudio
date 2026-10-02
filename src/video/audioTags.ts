@@ -163,7 +163,6 @@ export const ELEVEN_DEFAULT_SPEED = 1.1;
 export const elevenSettings = (voice: CastMember['voice']) => ({
   voiceId: voice.eleven?.voiceId,
   name: voice.eleven?.name,
-  stability: (voice.eleven?.stability ?? 'natural') as ElevenStability,
   speed: voice.eleven?.speed ?? ELEVEN_DEFAULT_SPEED,
 });
 

@@ -67,7 +67,7 @@ export const regenerateLine = async (project: Project, lineId: string, runJob: R
 /** 全セリフの音声の確認・作り直し */
 export const NarrationList: React.FC<{ project: Project; runJob: RunJob; onSelectScene?: (i: number) => void }> = ({ project, runJob, onSelectScene }) => {
   const meta = useContext(MetaContext)!;
-  const tts = ttsFor(meta, project.audio.ttsProvider);
+  const tts = ttsFor(meta, project.audio);
   const { playing, play, stop } = useNarrationPlayer(project);
 
   const rows = project.scenes.flatMap((s, si) =>

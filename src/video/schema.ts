@@ -276,8 +276,6 @@ export const CastMember = z.object({
         voiceId: z.string().optional(),
         /** 画面に出す声の名前 */
         name: z.string().optional(),
-        /** 表現の幅。creative=感情豊か（タグが効きやすい）/ natural / robust=安定 */
-        stability: z.enum(['creative', 'natural', 'robust']).optional(),
         /** 話す速さ（1 = その声の自然な速さ） */
         speed: z.number().min(0.7).max(1.5).optional(),
       })
@@ -311,6 +309,11 @@ export const AudioSettings = z.object({
   narration: z.boolean().default(true),
   /** 音声合成エンジン。auto = サーバーの設定（TTS_PROVIDER。既定は ElevenLabs）に従う */
   ttsProvider: z.enum(['auto', 'elevenlabs', 'openai', 'irodori']).default('auto'),
+  /**
+   * ElevenLabs の表現の幅（全セリフ共通。全体を1回で読むので声ごとには分けない）。
+   * creative=感情豊か（タグが効きやすいが崩れやすい）/ natural / robust=安定
+   */
+  elevenStability: z.enum(['creative', 'natural', 'robust']).default('natural'),
   narrationVolume: z.number().min(0).max(2).default(1),
 });
 export type AudioSettings = z.infer<typeof AudioSettings>;

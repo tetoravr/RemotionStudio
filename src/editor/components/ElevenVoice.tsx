@@ -1,6 +1,6 @@
 import { Check, Pause, Play, RotateCcw, Search, Upload, Wand2 } from 'lucide-react';
 import React, { useContext, useEffect, useRef, useState } from 'react';
-import { ELEVEN_STABILITY, elevenSettings, standardRefVoice, type ElevenStability } from '../../video/audioTags';
+import { standardRefVoice } from '../../video/audioTags';
 import { LIBRARY_CHARACTERS } from '../../video/library';
 import type { CastMember } from '../../video/schema';
 import { api, type ElevenVoice } from '../api';
@@ -51,7 +51,6 @@ export const ElevenVoiceSheet: React.FC<{ member: CastMember; set: Set; onClose:
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const player = usePlayer();
-  const e = elevenSettings(c.voice);
 
   const choose = (voiceId: string, name: string) => {
     set((m) => void (m.voice.eleven = { ...m.voice.eleven, voiceId, name }));
@@ -143,20 +142,6 @@ export const ElevenVoiceSheet: React.FC<{ member: CastMember; set: Set; onClose:
         </div>
       ) : null}
       {err ? <div className="error" style={{ marginTop: 10 }}>{err}</div> : null}
-
-      <div className="group" style={{ marginTop: 16 }}>
-        <div className="cell">
-          <div className="cell-label">
-            表現の幅
-            <span className="sub">「豊か」ほどタグの気持ちが強く出ますが、まれに読み方が崩れます</span>
-          </div>
-          <Seg
-            value={e.stability}
-            onChange={(v: ElevenStability) => set((m) => void (m.voice.eleven = { ...m.voice.eleven, stability: v }))}
-            options={(['robust', 'natural', 'creative'] as const).map((v) => ({ value: v, label: ELEVEN_STABILITY[v].label }))}
-          />
-        </div>
-      </div>
 
       <div className="sheet-actions">
         <button className="btn primary" onClick={onClose}>

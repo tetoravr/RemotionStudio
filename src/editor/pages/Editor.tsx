@@ -295,12 +295,17 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
     };
   }, [project?.id, size.w > 0]);
 
-  const tts = ttsFor(meta, project?.audio.ttsProvider);
+  const tts = ttsFor(meta, project?.audio);
   const staleByScene = useMemo(
     () => (project ? project.scenes.map((s) => s.lines.filter((l) => isAudioStale(l, project.cast, tts.engine)).length) : []),
     [project, tts.engine],
   );
   const staleCount = staleByScene.reduce((a, b) => a + b, 0);
+  /** 音声はあるが、今の声・台本と合っていないセリフ（このまま再生すると、シーンによって声が変わって聞こえる） */
+  const outdatedCount = useMemo(
+    () => (project ? project.scenes.reduce((n, s) => n + s.lines.filter((l) => l.audio && isAudioStale(l, project.cast, tts.engine)).length, 0) : 0),
+    [project, tts.engine],
+  );
 
   /** 実スクリーンショット未設定の画面紹介シーン（番号）。書き出し前に必須 */
   const missingShots = useMemo(
@@ -608,7 +613,7 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
               ) : (
                 <>
                   <span className="dot warn" />
-                  <span>音声がまだないセリフが {staleCount} 件あります</span>
+                  <span>{outdatedCount ? `作り直しが必要な音声が ${staleCount} 件あります` : `音声がまだないセリフが ${staleCount} 件あります`}</span>
                   <button className="btn sm primary" onClick={() => runJob('ナレーションを作っています', `/api/projects/${project.id}/narration`)}>
                     音声を作成
                   </button>
