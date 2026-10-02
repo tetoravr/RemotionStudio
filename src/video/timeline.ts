@@ -1,3 +1,4 @@
+import { stripAudioTags } from './audioTags';
 import type { Line, Project, Scene, SceneType } from './schema';
 
 export type LineTiming = {
@@ -65,7 +66,8 @@ export const estimateSpeechSec = (text: string, speed = 1.1): number => {
 export const lineDurationSec = (line: Line, project: Project): number => {
   if (project.audio.narration && line.audio && line.audio.durationSec > 0) return line.audio.durationSec;
   const speaker = project.cast.find((c) => c.id === line.speaker);
-  return estimateSpeechSec(line.speak || line.text, speaker?.voice.speed ?? 1.1);
+  // 文中のオーディオタグ（[laughs] など）は文字数に数えない
+  return estimateSpeechSec(stripAudioTags(line.speak || line.text), speaker?.voice.speed ?? 1.1);
 };
 
 

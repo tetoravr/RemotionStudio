@@ -15,6 +15,8 @@ import { go, MetaContext } from '../App';
 import { AudioPanel } from '../components/AudioPanel';
 import { BrandPanel } from '../components/BrandPanel';
 import { CastPanel } from '../components/CastPanel';
+import { LayerPanel } from '../components/LayerPanel';
+import { useVoiceUpdater, VoiceContext } from '../voice';
 import { LinesPanel } from '../components/LinesPanel';
 import { confirmDialog } from '../components/Dialogs';
 import { Progress, Seg, Sheet } from '../components/Fields';
@@ -27,7 +29,7 @@ import { Ic } from '../icons';
 
 export type Update = (fn: (draft: Project) => void, opts?: { silent?: boolean }) => void;
 export type RunJob = (label: string, url: string, body?: unknown) => Promise<Job | null>;
-type Tab = 'scene' | 'design' | 'cast' | 'sound';
+type Tab = 'scene' | 'layers' | 'design' | 'cast' | 'sound';
 
 /** コンテナにアスペクト比を保って収める */
 const useFit = (ratio: number, padX = 40, padY = 54) => {
@@ -295,12 +297,19 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
     };
   }, [project?.id, size.w > 0]);
 
-  const tts = ttsFor(meta, project?.audio.ttsProvider);
+  const tts = ttsFor(meta, project?.audio);
+  // セリフの音声を裏で作り直す（自動・手動とも）
+  const voice = useVoiceUpdater({ project, engine: tts.engine, ready: tts.ready, flush, update, projectRef });
   const staleByScene = useMemo(
     () => (project ? project.scenes.map((s) => s.lines.filter((l) => isAudioStale(l, project.cast, tts.engine)).length) : []),
     [project, tts.engine],
   );
   const staleCount = staleByScene.reduce((a, b) => a + b, 0);
+  /** 音声はあるが、今の声・台本と合っていないセリフ（このまま再生すると、シーンによって声が変わって聞こえる） */
+  const outdatedCount = useMemo(
+    () => (project ? project.scenes.reduce((n, s) => n + s.lines.filter((l) => l.audio && isAudioStale(l, project.cast, tts.engine)).length, 0) : 0),
+    [project, tts.engine],
+  );
 
   /** 実スクリーンショット未設定の画面紹介シーン（番号）。書き出し前に必須 */
   const missingShots = useMemo(
@@ -460,6 +469,21 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
     setSelectedEl(elId);
   }, []);
 
+  /** レイヤーから選ぶ。再生位置がそのシーンの外なら、シーンの中へ移してから選ぶ（選べるのは再生位置のシーンの要素だけ） */
+  const selectLayer = useCallback(
+    (elId: string) => {
+      const p = projectRef.current;
+      const st = timeline?.scenes[Math.min(selectedIdx.current, (timeline?.scenes.length ?? 1) - 1)];
+      const player = playerRef.current;
+      if (p && st && player) {
+        const f = player.getCurrentFrame();
+        if (f < st.start || f >= st.start + st.duration) player.seekTo(st.start + Math.min(st.duration - 1, Math.round(st.duration * 0.62)));
+      }
+      selectElement(elId);
+    },
+    [timeline, selectElement],
+  );
+
   if (loadErr)
     return (
       <div className="home-main">
@@ -477,7 +501,8 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
 
   const selectScene = (i: number) => {
     setSelected(i);
-    setTab('scene');
+    // シーンごとの内容のタブ（シーン・レイヤー）はそのまま。ほかのタブからはシーンへ
+    setTab((t) => (t === 'layers' ? t : 'scene'));
     setSelectedEl(null);
     const st = timeline.scenes[i];
     if (st) playerRef.current?.seekTo(st.start + Math.min(st.duration - 1, Math.round(st.duration * 0.62)));
@@ -522,6 +547,7 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
     saveState === 'saved' ? '保存済み' : saveState === 'saving' ? '保存中…' : saveState === 'dirty' ? '編集中' : '保存できませんでした';
 
   return (
+    <VoiceContext.Provider value={voice}>
     <div className="editor">
       <header className="toolbar">
         <div className="tb-left">
@@ -535,6 +561,7 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
           >
             <Ic n={ChevronLeft} size={20} mr={0} />
           </button>
+          <img className="tb-logo" src="/brand/logo.png" alt="Video Creator" title="Video Creator" />
           <div className="doc-title">
             <input value={project.title} onChange={(e) => update((p) => void (p.title = e.target.value))} aria-label="タイトル" />
             <span className="status" style={saveState === 'error' ? { color: 'var(--red)' } : undefined}>
@@ -595,22 +622,41 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
         />
 
         <main className="stage">
-          {project.audio.narration && (staleCount > 0 || !tts.ready) ? (
-            <div className="stage-banner">
+          {project.audio.narration && (staleCount > 0 || !tts.ready || voice.running.size > 0) ? (
+            <div className={`stage-banner ${voice.running.size || (voice.waiting.size && !Object.keys(voice.errors).length) ? 'solo' : ''}`}>
               {!tts.ready ? (
                 <>
                   <span className="dot danger" />
-                  <span>音声エンジン（Irodori-TTS）に接続できません</span>
+                  <span>{tts.problem}</span>
                   <button className="btn sm plain" onClick={() => setTab('sound')}>
                     詳しく
                   </button>
                 </>
+              ) : voice.running.size ? (
+                <>
+                  <span className="spinner" style={{ width: 13, height: 13 }} />
+                  <span>
+                    {voice.running.size === 1 ? 'セリフの音声を作り直しています' : '音声を作っています'}
+                    {voice.progress && voice.progress.total > 1 ? `（${voice.progress.done}/${voice.progress.total}）` : ''}
+                  </span>
+                </>
+              ) : voice.waiting.size && voice.waiting.size === staleCount ? (
+                <>
+                  <span className="dot accent" />
+                  <span>セリフの変更に合わせて、音声を作り直します</span>
+                </>
               ) : (
                 <>
                   <span className="dot warn" />
-                  <span>音声がまだないセリフが {staleCount} 件あります</span>
-                  <button className="btn sm primary" onClick={() => runJob('ナレーションを作っています', `/api/projects/${project.id}/narration`)}>
-                    音声を作成
+                  <span>
+                    {Object.keys(voice.errors).length
+                      ? `音声を作れなかったセリフがあります`
+                      : outdatedCount
+                        ? `内容が変わったセリフが ${staleCount} 件あります`
+                        : `音声がまだないセリフが ${staleCount} 件あります`}
+                  </span>
+                  <button className="btn sm primary" onClick={() => void voice.request('stale')}>
+                    音声を作り直す
                   </button>
                 </>
               )}
@@ -673,6 +719,7 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
               onChange={setTab}
               options={[
                 { value: 'scene', label: 'シーン' },
+                { value: 'layers', label: 'レイヤー' },
                 { value: 'design', label: 'デザイン' },
                 { value: 'cast', label: 'キャスト' },
                 { value: 'sound', label: 'サウンド' },
@@ -681,7 +728,10 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
           </div>
           <div className="inspector-body">
             {tab === 'scene' ? (
-              <SceneInspector project={project} index={sel} update={update} timing={timeline.scenes[sel]} runJob={runJob} onSelectElement={selectElement} />
+              <SceneInspector project={project} index={sel} update={update} timing={timeline.scenes[sel]} runJob={runJob} />
+            ) : null}
+            {tab === 'layers' ? (
+              <LayerPanel project={project} index={sel} update={update} selectedId={selectedEl} onSelect={selectLayer} onDeselect={() => setSelectedEl(null)} />
             ) : null}
             {tab === 'design' ? <BrandPanel project={project} update={update} /> : null}
             {tab === 'cast' ? <CastPanel project={project} update={update} runJob={runJob} flush={flush} /> : null}
@@ -739,5 +789,6 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
         />
       ) : null}
     </div>
+    </VoiceContext.Provider>
   );
 };

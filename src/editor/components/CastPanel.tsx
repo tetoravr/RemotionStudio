@@ -1,5 +1,6 @@
 import { Download, Ellipsis, Pause, Play, Plus, Sparkles, Square, Trash2 } from 'lucide-react';
 import React, { useContext, useRef, useState } from 'react';
+import { elevenSettings, lineTags } from '../../video/audioTags';
 import { LIBRARY_CHARACTERS, libraryCastMember } from '../../video/library';
 import { POSES, type CastMember, type Pose, type Project } from '../../video/schema';
 import { api, ttsFor } from '../api';
@@ -8,6 +9,7 @@ import { Ic } from '../icons';
 import type { RunJob, Update } from '../pages/Editor';
 import { confirmDialog, errorDialog } from './Dialogs';
 import { Cell, Disclosure, Field, FilePick, MenuItem, Num, Popover, Section, Select, Sheet, Slider, Text } from './Fields';
+import { ElevenVoiceSheet, elevenVoiceLabel } from './ElevenVoice';
 import { assetUrl, POSE_LABELS, poseImage } from './pickers';
 import { VoiceLab } from './VoiceLab';
 
@@ -50,7 +52,7 @@ const CastCard: React.FC<{ project: Project; member: CastMember; index: number; 
   const [voiceOpen, setVoiceOpen] = useState(false);
   const [previewing, setPreviewing] = useState<'loading' | 'playing' | null>(null);
   const audio = useRef<HTMLAudioElement | null>(null);
-  const tts = ttsFor(meta, project.audio.ttsProvider);
+  const tts = ttsFor(meta, project.audio);
   const fixed = Boolean(c.voice.refVoice);
   const refLabel = c.voice.refVoice ? meta.tts.irodori.labels?.[c.voice.refVoice] ?? c.voice.refVoice : '';
 
@@ -70,10 +72,12 @@ const CastCard: React.FC<{ project: Project; member: CastMember; index: number; 
     setPreviewing('loading');
     try {
       const line = project.scenes.flatMap((s) => s.lines).find((l) => l.speaker === c.id);
-      const url = await api.ttsPreview(line?.speak || line?.text || 'こんにちは！今日はよろしくお願いします！', c.voice, {
+      // library も送る（ElevenLabs で、選んでいない時はそのキャラの標準の声を使う）
+      const url = await api.ttsPreview(line?.speak || line?.text || 'こんにちは！今日はよろしくお願いします！', { ...c.voice, library: c.library } as CastMember['voice'], {
         delivery: line?.delivery,
         emoji: line?.emoji,
-        provider: tts.provider,
+        tags: line ? lineTags(line) : ['cheerfully'],
+        stability: project.audio.elevenStability,
       });
       audio.current?.pause();
       const a = new Audio(url);
@@ -153,15 +157,37 @@ const CastCard: React.FC<{ project: Project; member: CastMember; index: number; 
         </div>
       </Cell>
 
-      <Cell label="声" sub={fixed ? refLabel : '決めると、すべてのセリフが同じ声になります'}>
-        <span className={`badge ${fixed ? 'ok' : 'warn'}`}>{fixed ? '固定済み' : '未固定'}</span>
-        <button className="btn sm" onClick={() => setVoiceOpen(true)}>
-          声を選ぶ…
-        </button>
-      </Cell>
-      <Cell label="話す速さ" stack>
-        <Slider value={c.voice.speed} min={0.8} max={1.6} step={0.01} onChange={(v) => set((m) => void (m.voice.speed = v))} format={(v) => `×${v.toFixed(2)}`} />
-      </Cell>
+      {tts.provider === 'elevenlabs' ? (
+        <>
+          <Cell label="声" sub={elevenVoiceLabel(c)}>
+            <button className="btn sm" onClick={() => setVoiceOpen(true)}>
+              声を選ぶ…
+            </button>
+          </Cell>
+          <Cell label="話す速さ" stack>
+            <Slider
+              value={elevenSettings(c.voice).speed}
+              min={0.8}
+              max={1.3}
+              step={0.01}
+              onChange={(v) => set((m) => void (m.voice.eleven = { ...m.voice.eleven, speed: Math.round(v * 100) / 100 }))}
+              format={(v) => `×${v.toFixed(2)}`}
+            />
+          </Cell>
+        </>
+      ) : (
+        <>
+          <Cell label="声" sub={fixed ? refLabel : '決めると、すべてのセリフが同じ声になります'}>
+            <span className={`badge ${fixed ? 'ok' : 'warn'}`}>{fixed ? '固定済み' : '未固定'}</span>
+            <button className="btn sm" onClick={() => setVoiceOpen(true)}>
+              声を選ぶ…
+            </button>
+          </Cell>
+          <Cell label="話す速さ" stack>
+            <Slider value={c.voice.speed} min={0.8} max={1.6} step={0.01} onChange={(v) => set((m) => void (m.voice.speed = v))} format={(v) => `×${v.toFixed(2)}`} />
+          </Cell>
+        </>
+      )}
 
       <Disclosure summary="表情の画像">
         <div className="hint" style={{ marginBottom: 8 }}>
@@ -196,7 +222,13 @@ const CastCard: React.FC<{ project: Project; member: CastMember; index: number; 
         </div>
       </Disclosure>
 
-      {voiceOpen ? <VoiceSheet member={c} set={set} onClose={() => setVoiceOpen(false)} /> : null}
+      {voiceOpen ? (
+        tts.provider === 'elevenlabs' ? (
+          <ElevenVoiceSheet member={c} set={set} onClose={() => setVoiceOpen(false)} />
+        ) : (
+          <VoiceSheet member={c} set={set} onClose={() => setVoiceOpen(false)} />
+        )
+      ) : null}
     </div>
   );
 };

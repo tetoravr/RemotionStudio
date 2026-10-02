@@ -1,4 +1,4 @@
-import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, Ellipsis, Play, Plus, RefreshCw, Trash2 } from 'lucide-react';
+import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, Ellipsis, Play, Plus, RefreshCw, Trash2, TriangleAlert } from 'lucide-react';
 import React, { useContext, useEffect, useRef, useState } from 'react';
 import { normalizeAdjust, readAdjust, sceneLayout, setSceneLayout } from '../../video/edit/textEdit';
 import { isAudioStale } from '../../video/narrationKey';
@@ -6,12 +6,12 @@ import type { Line, Project } from '../../video/schema';
 import type { SceneTiming } from '../../video/timeline';
 import { ttsFor } from '../api';
 import { MetaContext } from '../App';
+import { useVoice } from '../voice';
 import { Ic } from '../icons';
 import type { RunJob, Update } from '../pages/Editor';
 import { SCENE_META } from '../sceneMeta';
 import { Field, MenuItem, Popover, Seg, Text } from './Fields';
-import { regenerateLine } from './NarrationList';
-import { EmojiPicker, POSE_LABELS, PosePicker, SpeakerPicker } from './pickers';
+import { EmojiPicker, POSE_LABELS, PosePicker, SpeakerPicker, TagPicker } from './pickers';
 
 const STYLE_LABELS: Record<Line['style'], string> = { bubble: '吹き出し', 'bubble-accent': '強調', caption: '字幕', none: '声のみ' };
 const rid = () => Math.random().toString(36).slice(2, 8);
@@ -111,15 +111,19 @@ const LineCard: React.FC<{
   // 詳細は最初から開いておく（閉じることもできる）
   const [open, setOpen] = useState(true);
   const scene = project.scenes[index];
-  const tts = ttsFor(meta, project.audio.ttsProvider);
+  const tts = ttsFor(meta, project.audio);
   const narration = project.audio.narration;
   const stale = isAudioStale(l, project.cast, tts.engine);
   const setLine = (patch: Partial<Line>) => update((p) => void Object.assign(p.scenes[index].lines[li], patch));
   const isCast = project.cast.some((c) => c.id === l.speaker);
   const bubble = l.style === 'bubble' || l.style === 'bubble-accent';
+  const voice = useVoice();
+  /** このセリフの音声を作り直して、すぐ聴く（最新の音声でも作り直す） */
   const redo = async () => {
-    const fresh = await regenerateLine(project, l.id, runJob);
-    if (fresh) play(fresh.src);
+    if (!voice) return;
+    await voice.request([l.id], { force: !stale });
+    const src = voice.audioOf(l.id);
+    if (src) play(src);
   };
   const move = (d: number) =>
     update((p) => {
@@ -190,13 +194,7 @@ const LineCard: React.FC<{
             {(timing.start / fps).toFixed(1)}秒〜
           </button>
         ) : null}
-        {narration ? (
-          stale ? (
-            <span className="badge warn">{l.audio ? '音声を更新' : '音声なし'}</span>
-          ) : l.audio ? (
-            <span className="caption">{l.audio.durationSec.toFixed(1)}秒</span>
-          ) : null
-        ) : null}
+        {narration ? <VoiceStatus line={l} stale={stale} onRedo={redo} /> : null}
         <span className="spacer" />
         <button type="button" className="line-toggle" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
           {open ? '閉じる' : '詳細'}
@@ -221,14 +219,37 @@ const LineCard: React.FC<{
               </div>
             </Field>
           ) : null}
-          <Field label="声の調子">
+          {tts.provider === 'elevenlabs' ? (
+            <Field label="声の調子" hint="タグがセリフの前に付き、その気持ち・話し方で読まれます。選ばない時は演技指示から自動で付きます">
+              <TagPicker line={l} onChange={(tags) => setLine({ tags })} />
+              <div style={{ marginTop: 6 }}>
+                <Text value={l.delivery} onChange={(v) => setLine({ delivery: v || undefined })} placeholder="演技指示（例: 驚いて・自信たっぷりに）" />
+              </div>
+            </Field>
+          ) : (
+            <Field label="声の調子">
+              <div className="hstack">
+                <EmojiPicker value={l.emoji} onChange={(v) => setLine({ emoji: v })} />
+                <Text value={l.delivery} onChange={(v) => setLine({ delivery: v || undefined })} placeholder="演技の指示（例: 驚いて）" />
+              </div>
+            </Field>
+          )}
+          <Field
+            label="読み方"
+            hint={
+              tts.provider === 'elevenlabs'
+                ? '英字のブランド名などを読み間違える時だけ、その語をカタカナに（句読点は残す）。[laughs] のように文の途中にタグも書けます'
+                : '英字のブランド名などを読み間違える時だけ、その語をカタカナに（句読点は残す）'
+            }
+          >
             <div className="hstack">
-              <EmojiPicker value={l.emoji} onChange={(v) => setLine({ emoji: v })} />
-              <Text value={l.delivery} onChange={(v) => setLine({ delivery: v || undefined })} placeholder="演技の指示（例: 驚いて）" />
+              <Text value={l.speak} onChange={(v) => setLine({ speak: v || undefined })} placeholder={tts.provider === 'elevenlabs' ? '空ならセリフどおりに読みます' : '例: だったら、スシトップ オーシーアール！'} />
+              {l.speak ? (
+                <button type="button" className="btn sm plain" onClick={() => setLine({ speak: undefined })} title="読み方の指定を外して、セリフどおりに読む">
+                  外す
+                </button>
+              ) : null}
             </div>
-          </Field>
-          <Field label="読み方" hint="英字のブランド名などを読み間違える時だけ、その語をカタカナに（句読点は残す）">
-            <Text value={l.speak} onChange={(v) => setLine({ speak: v || undefined })} placeholder="例: だったら、スシトップ オーシーアール！" />
           </Field>
           {bubble ? (
             <Field label="吹き出しのしっぽ" hint="位置は映像の上で吹き出しを選び、先端の点をドラッグして変えられます">
@@ -260,4 +281,54 @@ const LineCard: React.FC<{
       ) : null}
     </div>
   );
+};
+
+/** セリフの音声の状態。作成中・作り直し待ち・失敗・読み違いかも を、ひと目で分かるように出す */
+const VoiceStatus: React.FC<{ line: Line; stale: boolean; onRedo: () => void }> = ({ line: l, stale, onRedo }) => {
+  const voice = useVoice();
+  if (!voice) return null;
+  if (voice.running.has(l.id))
+    return (
+      <span className="voice-chip busy">
+        <span className="spinner" style={{ width: 11, height: 11, borderWidth: 1.5 }} />
+        音声を作成中
+      </span>
+    );
+  const err = voice.errors[l.id];
+  if (err)
+    return (
+      <button type="button" className="voice-chip error" title={err} onClick={onRedo} disabled={!voice.ready}>
+        <Ic n={RefreshCw} size={11} mr={0} />
+        作れませんでした・もう一度
+      </button>
+    );
+  if (stale) {
+    if (voice.waiting.has(l.id))
+      return (
+        <button type="button" className="voice-chip wait" onClick={onRedo} title="入力が落ち着いたら自動で作り直します（押すとすぐ作ります）">
+          <Ic n={RefreshCw} size={11} mr={0} />
+          まもなく音声を更新
+        </button>
+      );
+    return (
+      <button type="button" className="voice-chip action" onClick={onRedo} disabled={!voice.ready} title="今のセリフで音声を作り直します">
+        <Ic n={RefreshCw} size={11} mr={0} />
+        {l.audio ? '音声を作り直す' : '音声を作る'}
+      </button>
+    );
+  }
+  if (l.audio?.check && !l.audio.check.ok)
+    return (
+      <button
+        type="button"
+        className="voice-chip warn"
+        onClick={onRedo}
+        disabled={!voice.ready}
+        title={`聞こえた文: ${l.audio.check.heard || '（無音）'}${l.audio.check.reason ? `\n${l.audio.check.reason}` : ''}\n押すと作り直します`}
+      >
+        <Ic n={TriangleAlert} size={11} mr={0} />
+        読み違いかも・作り直す
+      </button>
+    );
+  return l.audio ? <span className="caption">{l.audio.durationSec.toFixed(1)}秒</span> : null;
 };

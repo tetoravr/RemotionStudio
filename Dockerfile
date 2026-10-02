@@ -1,5 +1,5 @@
-# Ad Studio（エディター＋APIサーバー＋書き出し）
-# 音声合成の Irodori-TTS は GPU が必要なので別のサーバーで動かし、IRODORI_TTS_URL でつなぐ（無ければ OpenAI TTS）
+# Video Creator（エディター＋APIサーバー＋書き出し）
+# ナレーションは ElevenLabs（.env の ELEVENLABS_API_KEY）。Irodori-TTS を使う時は GPU のある別サーバーで動かし、TTS_PROVIDER=irodori と IRODORI_TTS_URL でつなぐ
 FROM node:22-bookworm-slim
 
 # 書き出し（Remotion のヘッドレス Chromium）に必要なライブラリと、日本語フォント（予備）

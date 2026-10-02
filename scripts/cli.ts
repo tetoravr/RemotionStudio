@@ -132,15 +132,18 @@ const make = async () => {
     console.log(`\n✔ キャラ画像 ${Object.keys(r.images).length}枚${r.failures.length ? `（失敗 ${r.failures.length}）` : ''}`);
   }
 
-  if (flags.tts === 'openai' || flags.tts === 'irodori') {
-    project.audio.ttsProvider = flags.tts;
-    project = await saveProject(project);
-  }
+  // --tts=elevenlabs|irodori|openai で、この実行だけ音声エンジンを切り替える（既定は .env の TTS_PROVIDER → ElevenLabs）
+  if (flags.tts === 'elevenlabs' || flags.tts === 'openai' || flags.tts === 'irodori') config.tts.provider = flags.tts;
 
   if (flags['no-voice'] !== 'true') {
-    console.log(`\n▶ ナレーション生成中…（${resolveProvider(project.audio.ttsProvider) === 'irodori' ? 'Irodori-TTS' : 'OpenAI TTS'}）`);
-    await generateNarration(project, projectDir(project.id), { onProgress: (d, t, m) => bar(t ? d / t : 1, m) });
-    project = await saveProject(project);
+    const engine = { elevenlabs: 'ElevenLabs', irodori: 'Irodori-TTS', openai: 'OpenAI TTS' }[resolveProvider()];
+    console.log(`\n▶ ナレーション生成中…（${engine}）`);
+    try {
+      await generateNarration(project, projectDir(project.id), { onProgress: (d, t, m) => bar(t ? d / t : 1, m) });
+    } finally {
+      // 失敗したセリフがあっても、できた分の音声は保存する
+      project = await saveProject(project);
+    }
     console.log('\n✔ ナレーション完了');
   }
 

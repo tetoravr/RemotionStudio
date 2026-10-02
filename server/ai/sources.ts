@@ -197,7 +197,7 @@ const fetchUrl = async (url: string): Promise<SourceFile | { url: string; page: 
     if (u.protocol !== 'http:' && u.protocol !== 'https:') throw new Error(`http/https のURLを指定してください（${url}）`);
     await assertPublicUrl(u);
     res = await fetch(u, {
-      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AdStudio/1.0', 'Accept-Language': 'ja,en;q=0.8' },
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) VideoCreator/1.0', 'Accept-Language': 'ja,en;q=0.8' },
       redirect: 'manual',
       signal: AbortSignal.timeout(20_000),
     });

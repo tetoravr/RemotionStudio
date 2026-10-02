@@ -67,12 +67,12 @@ node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"
 
 `https://studio.example.com` を開き、会社の Google アカウントでログインできれば完了です。アプリは `127.0.0.1` で待ち受けたままなので、LAN から直接つながることはありません。
 
-Docker で動かす場合は `.env` に `CLOUDFLARE_TUNNEL_TOKEN=` を書き、`docker compose --profile tunnel up -d --build`（トンネルの Service は `http://studio:3210`）。Irodori をこの PC で動かしている時は `IRODORI_TTS_URL=http://host.docker.internal:8088`。
+Docker で動かす場合は `.env` に `CLOUDFLARE_TUNNEL_TOKEN=` を書き、`docker compose --profile tunnel up -d --build`（トンネルの Service は `http://studio:3210`）。Irodori をこの PC で動かして使う時は `TTS_PROVIDER=irodori` と `IRODORI_TTS_URL=http://host.docker.internal:8088`。
 
 ## B. クラウドのサーバーで動かす（Docker）
 
 1. Docker が使える Linux サーバー（4コア/8GB 以上推奨）を用意する
-2. このリポジトリを置き、`.env` を作る（手順 2 ＋ `OPENAI_API_KEY`）
+2. このリポジトリを置き、`.env` を作る（手順 2 ＋ `OPENAI_API_KEY`・`ELEVENLABS_API_KEY`）
 3. 起動する
 
    ```bash
@@ -81,8 +81,8 @@ Docker で動かす場合は `.env` に `CLOUDFLARE_TUNNEL_TOKEN=` を書き、`
 
 4. HTTPS のリバースプロキシ（Caddy・nginx・ロードバランサ、または上の Cloudflare Tunnel）から `127.0.0.1:3210` へ転送する
 
-- **音声**: Irodori-TTS は GPU が必要です。GPU サーバーで [Irodori-TTS-Server](https://github.com/Aratako/Irodori-TTS-Server) を動かして `IRODORI_TTS_URL` でつなぐか、`TTS_PROVIDER=openai` で OpenAI TTS を使います。
-- **保存先**: `projects/`（台本・音声・画像・書き出した動画）、`voices/`（参照音声）、`SUSHI UI/`（製品の画面）はボリュームに残ります。定期的にバックアップしてください。
+- **音声**: ナレーションは ElevenLabs（`ELEVENLABS_API_KEY`）で作るので、サーバーに GPU は不要です。Irodori-TTS を使う場合は GPU サーバーで [Irodori-TTS-Server](https://github.com/Aratako/Irodori-TTS-Server) を動かし、`TTS_PROVIDER=irodori` と `IRODORI_TTS_URL` でつなぎます。
+- **保存先**: `projects/`（台本・音声・画像・書き出した動画）、`voices/`（参照音声・ElevenLabs に登録した標準の声の対応表）、`SUSHI UI/`（製品の画面）はボリュームに残ります。定期的にバックアップしてください。
 - **台数**: 処理の進み具合をメモリで持っているので、サーバーは1台で動かしてください。
 
 ---

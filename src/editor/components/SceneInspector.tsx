@@ -11,7 +11,6 @@ import { MetaContext } from '../App';
 import { Ic } from '../icons';
 import type { RunJob, Update } from '../pages/Editor';
 import { SCENE_META } from '../sceneMeta';
-import { ElementList } from './ElementList';
 import { Cell, Disclosure, FilePick, MenuItem, Num, Popover, Section, Seg, Select, Text, Toggle } from './Fields';
 import { assetUrl, Avatar, POSE_LABELS, PosePicker } from './pickers';
 
@@ -25,13 +24,12 @@ const BG_LABELS: Record<string, string> = {
 const iconOptions = ICON_NAMES.map((n) => ({ value: n, label: ICON_LABELS[n] }));
 const HIGHLIGHT_HINT = '[[ ]] で囲んだ文字はブランドカラーになります';
 
-export const SceneInspector: React.FC<{ project: Project; index: number; update: Update; timing?: SceneTiming; runJob?: RunJob; onSelectElement?: (id: string) => void }> = ({
+export const SceneInspector: React.FC<{ project: Project; index: number; update: Update; timing?: SceneTiming; runJob?: RunJob }> = ({
   project,
   index,
   update,
   timing,
   runJob,
-  onSelectElement,
 }) => {
   const scene = project.scenes[index];
   const set = (key: string, value: unknown) =>
@@ -180,7 +178,6 @@ export const SceneInspector: React.FC<{ project: Project; index: number; update:
               </div>
             ) : null}
           </Disclosure>
-          <ElementList project={project} index={index} update={update} onSelect={onSelectElement} />
         </div>
       </Section>
     </div>

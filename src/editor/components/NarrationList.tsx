@@ -2,10 +2,10 @@ import { Ellipsis, Play, RefreshCw, Square } from 'lucide-react';
 import React, { useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { isAudioStale } from '../../video/narrationKey';
 import type { Project } from '../../video/schema';
-import { api, ttsFor } from '../api';
+import { ttsFor } from '../api';
 import { MetaContext } from '../App';
+import { useVoice } from '../voice';
 import { Ic } from '../icons';
-import type { RunJob } from '../pages/Editor';
 import { confirmDialog } from './Dialogs';
 import { MenuItem, Popover } from './Fields';
 import { Avatar, speakerName } from './pickers';
@@ -55,19 +55,11 @@ export const useNarrationPlayer = (project: Project) => {
   return { playing, play, stop };
 };
 
-/** 作り直したあとの音声を取り直して、すぐ再生する */
-export const regenerateLine = async (project: Project, lineId: string, runJob: RunJob): Promise<{ id: string; src: string } | null> => {
-  const done = await runJob('このセリフの音声を作り直しています', `/api/projects/${project.id}/narration`, { lineIds: [lineId] });
-  if (!done) return null;
-  const fresh = await api.get(project.id);
-  const line = fresh.scenes.flatMap((s) => s.lines).find((l) => l.id === lineId);
-  return line?.audio ? { id: lineId, src: line.audio.src } : null;
-};
-
 /** 全セリフの音声の確認・作り直し */
-export const NarrationList: React.FC<{ project: Project; runJob: RunJob; onSelectScene?: (i: number) => void }> = ({ project, runJob, onSelectScene }) => {
+export const NarrationList: React.FC<{ project: Project; onSelectScene?: (i: number) => void }> = ({ project, onSelectScene }) => {
   const meta = useContext(MetaContext)!;
-  const tts = ttsFor(meta, project.audio.ttsProvider);
+  const tts = ttsFor(meta, project.audio);
+  const voice = useVoice();
   const { playing, play, stop } = useNarrationPlayer(project);
 
   const rows = project.scenes.flatMap((s, si) =>
@@ -76,11 +68,15 @@ export const NarrationList: React.FC<{ project: Project; runJob: RunJob; onSelec
   const playable = rows.filter((r) => r.line.audio).map((r) => ({ id: r.line.id, src: r.line.audio!.src }));
   const staleCount = rows.filter((r) => r.stale).length;
 
+  /** このセリフだけ作り直して、すぐ聴く */
   const redo = async (id: string) => {
+    if (!voice) return;
     stop();
-    const fresh = await regenerateLine(project, id, runJob);
-    if (fresh) play([fresh]);
+    await voice.request([id], { force: true });
+    const src = voice.audioOf(id);
+    if (src) play([{ id, src }]);
   };
+  const busy = Boolean(voice?.running.size);
 
   return (
     <div className="group">
@@ -90,9 +86,14 @@ export const NarrationList: React.FC<{ project: Project; runJob: RunJob; onSelec
           {playing ? '停止' : '通して聴く'}
         </button>
         <span className="spacer" />
-        {staleCount ? (
-          <button className="btn sm primary" disabled={!tts.ready} onClick={() => runJob('ナレーションを作っています', `/api/projects/${project.id}/narration`)} title="音声がない・内容が変わったセリフだけを作ります">
-            {staleCount}件を作成
+        {busy ? (
+          <span className="hstack caption">
+            <span className="spinner" style={{ width: 12, height: 12 }} />
+            作成中
+          </span>
+        ) : staleCount ? (
+          <button className="btn sm primary" disabled={!tts.ready} onClick={() => void voice?.request('stale')} title="音声がない・内容が変わったセリフだけを作ります">
+            {staleCount}件を作り直す
           </button>
         ) : (
           <span className="caption">すべて最新です</span>
@@ -112,7 +113,10 @@ export const NarrationList: React.FC<{ project: Project; runJob: RunJob; onSelec
               onClick={async () => {
                 close();
                 if (await confirmDialog({ title: 'すべてのセリフの音声を作り直しますか？', message: `${rows.length}件のセリフの音声を作り直します。`, ok: '作り直す' }))
-                  runJob('ナレーションを作り直しています', `/api/projects/${project.id}/narration`, { force: true });
+                  void voice?.request(
+                    rows.map((r) => r.line.id),
+                    { force: true },
+                  );
               }}
             >
               すべて作り直す
@@ -136,10 +140,22 @@ export const NarrationList: React.FC<{ project: Project; runJob: RunJob; onSelec
             <div className="m">
               シーン{scene + 1} ・ {speakerName(project, line.speaker)}
               {line.audio && !stale ? ` ・ ${line.audio.durationSec.toFixed(1)}秒` : ''}
-              {stale ? <span className="warn-text">・{line.audio ? '内容が変わりました' : '音声なし'}</span> : null}
+              {voice?.running.has(line.id) ? (
+                <span className="accent-text">・作成中</span>
+              ) : voice?.errors[line.id] ? (
+                <span className="danger-text" title={voice.errors[line.id]}>
+                  ・作れませんでした
+                </span>
+              ) : stale ? (
+                <span className="warn-text">・{voice?.waiting.has(line.id) ? 'まもなく更新' : line.audio ? '内容が変わりました' : '音声なし'}</span>
+              ) : line.audio?.check && !line.audio.check.ok ? (
+                <span className="warn-text" title={`聞こえた文: ${line.audio.check.heard}`}>
+                  ・読み違いかも
+                </span>
+              ) : null}
             </div>
           </div>
-          <button className="icon-btn sm" title="このセリフだけ作り直して、すぐ聴く" disabled={!tts.ready} onClick={() => redo(line.id)}>
+          <button className="icon-btn sm" title="このセリフだけ作り直して、すぐ聴く" disabled={!tts.ready || Boolean(voice?.running.has(line.id))} onClick={() => redo(line.id)}>
             <Ic n={RefreshCw} size={13} mr={0} />
           </button>
         </div>

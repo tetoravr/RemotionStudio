@@ -13,6 +13,10 @@ import { draftBrief } from './ai/sources';
 import { loadUiLibrary } from './ai/uiLibrary';
 import { candidateFile, createCandidate, deleteVoice, localVoiceFile, localVoices, registerVoice } from './ai/voices';
 import { engineId, irodoriStatus, OPENAI_VOICES, resolveProvider, synthesizeToFile } from './ai/tts';
+import {
+  addLibraryVoice, adoptDesignedVoice, cloneVoice, designPreviewFile, designVoice, elevenStatus, libraryVoices, myVoices,
+} from './ai/elevenlabs';
+import { normalizeTag, stripAudioTags, withAudioTags } from '../src/video/audioTags';
 import { generateCharacter, type CharacterRequest } from './characters';
 import { config, hasOpenAI, ROOT } from './env';
 import { conflictFor, getJob, runningJobs, startJob } from './jobs';
@@ -44,16 +48,22 @@ const h = (fn: Handler) => (req: Request, res: Response, next: NextFunction) => 
 const param = (req: Request, key: string) => String(req.params[key]);
 
 // ---------- メタ情報 ----------
-app.get('/api/meta', async (_req, res) => {
-  const irodori = await irodoriStatus();
+app.get('/api/meta', async (req, res) => {
+  const provider = resolveProvider('auto');
+  // 使っていないエンジンの状態は調べない（つながらない相手を毎回待たないように）
+  const [irodori, elevenlabs] = await Promise.all([
+    provider === 'irodori' ? irodoriStatus() : Promise.resolve({ online: false, url: '', voices: [] as string[] }),
+    elevenStatus(req.query.refresh === '1'),
+  ]);
   res.json({
     openai: hasOpenAI(),
     models: config.models,
     tts: {
       /** 環境設定（TTS_PROVIDER）で解決した既定のエンジン */
-      default: resolveProvider('auto'),
-      engines: { openai: engineId('openai'), irodori: engineId('irodori') },
+      default: provider,
+      engines: { elevenlabs: engineId('elevenlabs'), openai: engineId('openai'), irodori: engineId('irodori') },
       irodori,
+      elevenlabs,
     },
     voices: OPENAI_VOICES,
     icons: ICON_NAMES,
@@ -311,9 +321,9 @@ app.post(
   '/api/projects/:id/narration',
   h(async (req, res) => {
     const id = param(req, 'id');
-    // lineIds を指定すると、そのセリフだけを（変更の有無にかかわらず）作り直す
+    // lineIds を指定すると、そのセリフだけを作り直す（force:false なら、音声が古いものだけ。エディターの自動の作り直し）
     const only = Array.isArray(req.body?.lineIds) ? (req.body.lineIds as unknown[]).map(String) : undefined;
-    const force = Boolean(req.body?.force) || Boolean(only);
+    const force = req.body?.force !== undefined ? Boolean(req.body.force) : Boolean(only);
     const busy = conflictFor(id, 'narration');
     if (busy) {
       res.status(409).json({ error: busy });
@@ -323,16 +333,23 @@ app.post(
       const project = await loadProject(id);
       const todo = staleLines(project, force, only).length;
       if (!todo) return { generated: 0 };
-      await generateNarration(project, projectDir(id), {
-        force,
-        only,
-        onProgress: (d, t, m) => ctx.progress(t ? d / t : 1, `ナレーション生成 ${d}/${t} ${m}`),
-      });
+      // 一部のセリフが失敗しても（文字数の上限など）、できた分の音声は残す（作り直しでクレジットを無駄にしない）
+      let failure: unknown = null;
+      try {
+        await generateNarration(project, projectDir(id), {
+          force,
+          only,
+          onProgress: (d, t, m) => ctx.progress(t ? d / t : 1, `ナレーション生成 ${d}/${t} ${m}`),
+        });
+      } catch (e) {
+        failure = e;
+      }
       // 生成中にエディタで編集された内容を壊さないよう、最新を読み直して音声だけ反映
       const latest = await loadProject(id);
       const audio = new Map(project.scenes.flatMap((s) => s.lines.map((l) => [l.id, l.audio] as const)));
       for (const s of latest.scenes) for (const l of s.lines) if (audio.get(l.id)) l.audio = audio.get(l.id);
       await saveProject(latest);
+      if (failure) throw failure;
       return { generated: todo };
     });
     res.json({ jobId: job.id });
@@ -386,13 +403,21 @@ app.post(
 app.post(
   '/api/tts/preview',
   h(async (req, res) => {
-    const { text = 'こんにちは！よろしくね！', voice, delivery, emoji, provider } = req.body ?? {};
+    const { text = 'こんにちは！よろしくね！', voice, delivery, emoji, tags, stability } = req.body ?? {};
+    const provider = resolveProvider('auto');
+    const plain = String(text).slice(0, 200);
+    // ElevenLabs はタグを先頭に付けて読む。タグを読めないエンジンには外して渡す
+    const input =
+      provider === 'elevenlabs'
+        ? withAudioTags(plain, Array.isArray(tags) ? (tags as unknown[]).map((t) => normalizeTag(String(t))).filter(Boolean).slice(0, 3) : [])
+        : stripAudioTags(plain);
     const tmp = path.join(config.projectsDir, `.tts-preview-${Date.now()}.wav`);
     try {
-      await synthesizeToFile(String(text).slice(0, 200), voice ?? DEFAULT_CAST[0].voice, tmp, {
+      await synthesizeToFile(input, voice ?? DEFAULT_CAST[0].voice, tmp, {
         delivery: delivery || undefined,
         emoji: emoji || undefined,
-        provider: resolveProvider(['openai', 'irodori'].includes(provider) ? provider : 'auto'),
+        provider,
+        stability: ['creative', 'natural', 'robust'].includes(stability) ? stability : undefined,
       });
       res.type('audio/wav').send(fs.readFileSync(tmp));
     } finally {
@@ -430,7 +455,83 @@ app.post(
   }),
 );
 
-// ---------- 参照音声（声の固定） ----------
+// ---------- ElevenLabs の声 ----------
+/** 声の一覧。scope=mine は自分の声、library は共有ライブラリの日本語の声 */
+app.get(
+  '/api/tts/eleven/voices',
+  h(async (req, res) => {
+    const search = String(req.query.q ?? '').slice(0, 80);
+    const voices = req.query.scope === 'library' ? await libraryVoices({ search, gender: String(req.query.gender ?? '') }) : await myVoices(search);
+    res.json({ voices });
+  }),
+);
+
+/** 共有ライブラリの声を自分の声に追加する */
+app.post(
+  '/api/tts/eleven/library/add',
+  h(async (req, res) => {
+    const { publicOwnerId, voiceId, name } = req.body ?? {};
+    if (!publicOwnerId || !voiceId) {
+      res.status(400).json({ error: '声が指定されていません' });
+      return;
+    }
+    res.json({ voiceId: await addLibraryVoice({ publicOwnerId: String(publicOwnerId), voiceId: String(voiceId), name: String(name ?? '') }), name: String(name ?? '') });
+  }),
+);
+
+/** 声のイメージから候補を作る（Voice Design。1回で3つ前後） */
+app.post(
+  '/api/tts/eleven/design',
+  h(async (req, res) => {
+    const description = String(req.body?.description ?? '').trim();
+    if (description.length < 4) {
+      res.status(400).json({ error: '声のイメージを入力してください' });
+      return;
+    }
+    const previews = await designVoice({ description, text: String(req.body?.text ?? '') });
+    res.json({ previews: previews.map((p) => ({ id: p.generatedVoiceId, durationSec: p.durationSec, url: `/api/tts/eleven/previews/${p.generatedVoiceId}.mp3` })) });
+  }),
+);
+
+app.get('/api/tts/eleven/previews/:file', (req, res) => {
+  const file = designPreviewFile(param(req, 'file').replace(/\.mp3$/, ''));
+  if (!file || !fs.existsSync(file)) {
+    res.status(404).json({ error: 'preview not found' });
+    return;
+  }
+  res.type('audio/mpeg').send(fs.readFileSync(file));
+});
+
+/** 気に入った候補を自分の声として保存する */
+app.post(
+  '/api/tts/eleven/design/adopt',
+  h(async (req, res) => {
+    const { generatedVoiceId, name, description } = req.body ?? {};
+    if (!generatedVoiceId) {
+      res.status(400).json({ error: '候補が指定されていません' });
+      return;
+    }
+    const voiceName = String(name ?? '').trim() || 'voice';
+    res.json({ voiceId: await adoptDesignedVoice({ generatedVoiceId: String(generatedVoiceId), name: voiceName, description: String(description ?? '') }), name: voiceName });
+  }),
+);
+
+/** 手持ちの音声から声を作る（自分の声、または許諾を得た声だけ） */
+app.post(
+  '/api/tts/eleven/clone',
+  upload.single('file'),
+  h(async (req, res) => {
+    if (!req.file) {
+      res.status(400).json({ error: 'ファイルがありません' });
+      return;
+    }
+    const original = Buffer.from(req.file.originalname, 'latin1').toString('utf8');
+    const name = String(req.body?.name ?? '').trim() || path.parse(original).name;
+    res.json({ voiceId: await cloneVoice({ name, audio: req.file.buffer, filename: original }), name });
+  }),
+);
+
+// ---------- 参照音声（声の固定・Irodori-TTS） ----------
 /** Voice Design で声の候補を1本つくる（seed を変えるたびに別の声になる） */
 app.post(
   '/api/tts/voice-candidates',
@@ -577,14 +678,19 @@ if (authEnabled() && authProblems().length) console.warn(`  ⚠ ログイン設�
 await seedSamples();
 await emptyTrash();
 app.listen(config.port, config.host, async () => {
-  console.log(`\n  Ad Studio server: http://localhost:${config.port}`);
+  console.log(`\n  Video Creator server: http://localhost:${config.port}`);
   console.log(`  ログイン: ${authEnabled() ? `Google（${[...(process.env.AUTH_ALLOWED_DOMAINS ?? '').split(','), ...(process.env.AUTH_ALLOWED_EMAILS ?? '').split(',')].filter(Boolean).join(', ')}）` : 'なし（このPCだけで使う設定）'}`);
   console.log(`  OpenAI: ${hasOpenAI() ? `有効 (${config.models.text} / ${config.models.tts} / ${config.models.image})` : '未設定（.env に OPENAI_API_KEY を設定すると AI 機能が使えます）'}`);
   const provider = resolveProvider('auto');
-  const irodori = await irodoriStatus();
-  console.log(
-    `  ナレーション: ${provider === 'irodori' ? 'Irodori-TTS' : 'OpenAI TTS'}` +
-      (provider === 'irodori' ? (irodori.online ? `（接続OK: ${irodori.url}）` : `（⚠ ${irodori.url} に接続できません。scripts/start-irodori.sh で起動してください）`) : irodori.online ? `（Irodori-TTS も利用可能: ${irodori.url}。使うには .env に IRODORI_TTS_URL を設定）` : '') +
-      '\n',
-  );
+  if (provider === 'elevenlabs') {
+    const el = await elevenStatus();
+    console.log(
+      `  ナレーション: ElevenLabs（${config.eleven.model}）` +
+        (el.online ? `（接続OK${el.quota ? `・今月 ${el.quota.used.toLocaleString()} / ${el.quota.limit.toLocaleString()} 文字` : ''}）` : `（⚠ ${el.error}）`) +
+        '\n',
+    );
+  } else if (provider === 'irodori') {
+    const irodori = await irodoriStatus();
+    console.log(`  ナレーション: Irodori-TTS${irodori.online ? `（接続OK: ${irodori.url}）` : `（⚠ ${irodori.url} に接続できません。scripts/start-irodori.sh で起動してください）`}\n`);
+  } else console.log('  ナレーション: OpenAI TTS\n');
 });
