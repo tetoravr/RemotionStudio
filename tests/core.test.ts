@@ -511,6 +511,9 @@ test('音色補正: 補正なしなら元のまま、高音域を上げると高
 test('ElevenLabs: タグ付きの文と声の設定を送り、標準の声は初回だけクローンする（模擬サーバー）', async () => {
   const reqs: { url: string; body: string; key?: string }[] = [];
   let ttsCalls = 0;
+  let cloneN = 0;
+  // アカウントにすでにある声（別の環境で作った声）
+  let existing: { voice_id: string; name: string; description?: string }[] = [];
   const rate = 44100;
   const tone = new Float32Array(rate);
   for (let i = 4000; i < 30000; i++) tone[i] = Math.sin(i / 8) * 0.3;
@@ -521,7 +524,8 @@ test('ElevenLabs: タグ付きの文と声の設定を送り、標準の声は�
     req.on('end', () => {
       reqs.push({ url: req.url ?? '', body: Buffer.concat(chunks).toString('utf8'), key: req.headers['xi-api-key'] as string });
       res.setHeader('content-type', 'application/json');
-      if (req.url === '/v1/voices/add') return void res.end(JSON.stringify({ voice_id: `cloned${reqs.length}`, requires_verification: false }));
+      if (req.url === '/v1/voices/add') return void res.end(JSON.stringify({ voice_id: `cloned${++cloneN}`, requires_verification: false }));
+      if (req.url?.startsWith('/v2/voices')) return void res.end(JSON.stringify({ voices: existing }));
       if (req.url?.startsWith('/v1/text-to-speech/')) {
         ttsCalls++;
         // 2回目は「声が消えた」ことにする → 作り直して1回だけやり直すはず
@@ -565,6 +569,12 @@ test('ElevenLabs: タグ付きの文と声の設定を送り、標準の声は�
     assert.equal(last.voice_settings.stability, 0);
     // 1.2 を超える速さは、ElevenLabs の上限で作ってから伸縮する
     assert.equal(last.voice_settings.speed, 1.2);
+    // 覚えた声が無い環境でも、アカウントに以前作った声（旧名「Ad Studio」）があれば、クローンせずに使い回す
+    fs.rmSync(path.join(tmp, 'elevenlabs.json'));
+    existing = [{ voice_id: 'old-saki', name: '速水さき（標準の声）（Ad Studio）' }];
+    await synthesizeToFile('はい！', voice, path.join(tmp, 'd.wav'), { provider: 'elevenlabs' });
+    assert.equal(clones().length, 2, 'existing voice reused');
+    assert.match(reqs.filter((x) => x.url.startsWith('/v1/text-to-speech/')).at(-1)!.url, /^\/v1\/text-to-speech\/old-saki\?/);
   } finally {
     Object.assign(config.eleven, saved);
     config.voicesDir = savedDir;

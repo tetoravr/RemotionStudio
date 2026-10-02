@@ -287,6 +287,13 @@ const autoKey = async (voice: VoiceWithLibrary) => {
 
 const inflight = new Map<string, Promise<string>>();
 
+/** 以前に作った自動の声を、自分の声から探す（説明に覚えたキーが一致する声を優先。旧名「Ad Studio」で作った声も使う） */
+const findAutoVoice = async (label: string, key: string) => {
+  const mine = await myVoices(label).catch(() => [] as ElevenVoice[]);
+  const names = [`${label}（Video Creator）`, `${label}（Ad Studio）`];
+  return (mine.find((v) => v.description?.includes(key)) ?? mine.find((v) => names.includes(v.name)))?.id ?? null;
+};
+
 /**
  * 合成に使う voice_id。
  * 1) キャストで選んだ声 2) 参照音声（標準の声など）をクローンした声 3) 声のイメージから作った声
@@ -305,12 +312,20 @@ export const resolveElevenVoice = async (voice: VoiceWithLibrary): Promise<strin
         let made: { voiceId: string; label: string } | null = null;
         if (file && ref) {
           const label = (await localVoices()).find((v) => v.id === ref)?.label ?? ref;
-          try {
-            made = { voiceId: await cloneVoice({ name: `${label}（Video Creator）`, audio: await fs.readFile(file), filename: path.basename(file), description: 'Video Creator の標準の声' }), label };
+          // 別の環境（別のPC・サーバー）ですでに作った声があれば使い回す（声の枠を使い切らないように）
+          const existing = await findAutoVoice(label, key);
+          if (existing) made = { voiceId: existing, label };
+          else try {
+            made = { voiceId: await cloneVoice({ name: `${label}（Video Creator）`, audio: await fs.readFile(file), filename: path.basename(file), description: `Video Creator の標準の声 ${key}` }), label };
           } catch (e) {
             // クローンできないプランでは、声のイメージから作る
             console.warn(`[elevenlabs] ${ref} をクローンできませんでした: ${(e as Error).message}`);
           }
+        }
+        if (!made) {
+          const description = designDescription(voice);
+          const existing = await findAutoVoice(description.slice(0, 24), key);
+          if (existing) made = { voiceId: existing, label: `${description.slice(0, 24)}（Video Creator）` };
         }
         if (!made) {
           const description = designDescription(voice);
