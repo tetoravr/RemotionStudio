@@ -87,16 +87,21 @@ Docker で動かす場合は `.env` に `CLOUDFLARE_TUNNEL_TOKEN=` を書き、`
 
 ## C. Render で動かす
 
-[Render](https://render.com/) が GitHub のこのリポジトリから Docker イメージを作り、そのまま公開します。
+[Render](https://render.com/) が GitHub のこのリポジトリから Docker イメージを作って動かし、SUSHI CREATOR のポータルの **`https://sushi-creator.sushitop.io/video-creator/`** で使えるようにします。
 
+```
+ブラウザ → sushi-creator.sushitop.io/video-creator/*（ポータルの静的サイト）
+          └ リライト → video-creator.onrender.com/video-creator/*（このアプリの Web Service）
+```
+
+- ポータル（静的サイト）だけでは動きません。台本・音声・書き出しに、このアプリのサーバーが要るためです。ポータルにビルドしたもの（`dist/`）を置いても、API が無いので「サーバーに接続できません（HTTP 404）」になります。
 - **ビルドしたもの（`dist/` など）を GitHub に上げる必要はありません。** Render が `Dockerfile` のとおりにビルド（`npm ci` → `npm run build` → 書き出し用の Chromium の用意）します。`main` に push するたびに、自動でビルドとデプロイが行われます。
 - **API キーなどの秘密の値は GitHub に上げません。** Render の画面（サービスの「Environment」）に入力します。`.env` は git にも Docker イメージにも入りません（`.gitignore`・`.dockerignore`）。
-- 設定はリポジトリの [`render.yaml`](../render.yaml)（Blueprint）にまとめてあります。
+- 設定はリポジトリの [`render.yaml`](../render.yaml)（Blueprint）にまとめてあります。`BASE_PATH=/video-creator` で、画面・API・ファイルをすべて `/video-creator/` の下に置きます（ローカルの `npm run dev` は今までどおりルートで動きます）。
 
 ### 手順
 
-1. **Google ログインの準備**（上の手順 1）。承認済みのリダイレクト URI は `https://video-creator.onrender.com/auth/callback`
-   - サービス名が使われていて別の URL（`https://video-creator-xxxx.onrender.com` など）になった時は、デプロイ後に表示された URL に合わせて直します。
+1. **Google ログインの準備**（上の手順 1）。承認済みのリダイレクト URI は `https://sushi-creator.sushitop.io/video-creator/auth/callback`
 2. Render の「New」→「**Blueprint**」→ GitHub の `tetoravr/RemotionStudio` を選ぶ
 3. 秘密の値を入力する画面が出るので、入力して「Apply」
 
@@ -108,8 +113,18 @@ Docker で動かす場合は `.env` に `CLOUDFLARE_TUNNEL_TOKEN=` を書き、`
    | `GOOGLE_CLIENT_SECRET` | 手順 1 のシークレット |
 
    - `SESSION_SECRET` は Render が自動で作ります。`AUTH_ALLOWED_DOMAINS` は `tetoravr.com` です（変える時は Environment で）。
-   - `PUBLIC_URL` は不要です（Render の URL を自動で使います）。独自ドメインをつなぐ時だけ `PUBLIC_URL=https://studio.example.com` を足し、Google のリダイレクト URI もそのドメインに変えます。
-4. デプロイが終わったら URL を開き、会社の Google アカウントでログインできれば完了です。
+   - `BASE_PATH`・`PUBLIC_URL` は `render.yaml` に書いてあります。
+4. デプロイが終わったら、Web Service の URL（`https://video-creator.onrender.com` など。名前が使われていると `video-creator-xxxx` になります）を控える
+5. **ポータルの静的サイト**（`sushi-creator`）の「Redirects/Rewrites」に、上から次の順で追加して保存する
+
+   | Source | Destination | Action |
+   |---|---|---|
+   | `/video-creator` | `/video-creator/` | Redirect |
+   | `/video-creator/*` | `https://video-creator.onrender.com/video-creator/*` | Rewrite |
+
+   - Destination のホストは手順 4 で控えた URL にします。
+   - ポータルのリポジトリに `video-creator/` フォルダが残っていると、ファイルがある URL ではリライトが効きません。ポータル側には置かないでください。
+6. `https://sushi-creator.sushitop.io/video-creator/` を開き、会社の Google アカウントでログインできれば完了です。
 
 ### 知っておくこと
 

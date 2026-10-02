@@ -13,6 +13,7 @@ import type { RunJob, Update } from '../pages/Editor';
 import { SCENE_META } from '../sceneMeta';
 import { Cell, Disclosure, FilePick, MenuItem, Num, Popover, Section, Seg, Select, Text, Toggle } from './Fields';
 import { assetUrl, Avatar, POSE_LABELS, PosePicker } from './pickers';
+import { withBase } from '../base';
 
 export { POSE_LABELS };
 
@@ -581,7 +582,7 @@ const VisualEditor: React.FC<{ projectId: string; sceneId: string; visual: Visua
           </Cell>
           <Cell>
             <div className="hstack wrap">
-              {visual.src ? <img src={`/files/${projectId}/${visual.src}`} alt="" className="thumb-img" style={{ height: 64, background: '#fff' }} /> : null}
+              {visual.src ? <img src={withBase(`/files/${projectId}/${visual.src}`)} alt="" className="thumb-img" style={{ height: 64, background: '#fff' }} /> : null}
               <button
                 className="btn sm"
                 disabled={!meta.openai || !runJob || !visual.prompt?.trim()}
@@ -603,7 +604,7 @@ const VisualEditor: React.FC<{ projectId: string; sceneId: string; visual: Visua
           <Cell>
             <div className="hstack wrap">
               {visual.src && !visual.src.startsWith('ui:') ? (
-                <img src={`/files/${projectId}/${visual.src}`} alt="" className="thumb-img" style={{ height: 64 }} />
+                <img src={withBase(`/files/${projectId}/${visual.src}`)} alt="" className="thumb-img" style={{ height: 64 }} />
               ) : (
                 <span className="warn-text small">
                   <Ic n={TriangleAlert} size={12} />

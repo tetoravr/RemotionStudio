@@ -26,6 +26,7 @@ import { SceneInspector } from '../components/SceneInspector';
 import { SceneNavigator } from '../components/SceneNavigator';
 import { Transport } from '../components/Transport';
 import { Ic } from '../icons';
+import { withBase } from '../base';
 
 export type Update = (fn: (draft: Project) => void, opts?: { silent?: boolean }) => void;
 export type RunJob = (label: string, url: string, body?: unknown) => Promise<Job | null>;
@@ -317,7 +318,7 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
     [project],
   );
 
-  const inputProps = useMemo(() => (project ? { project, assetBaseUrl: `/files/${project.id}/` } : null), [project]);
+  const inputProps = useMemo(() => (project ? { project, assetBaseUrl: withBase(`/files/${project.id}/`) } : null), [project]);
 
   const curIdx = project && timeline ? timeline.scenes.findIndex((st) => frame >= st.start && frame < st.start + st.duration) : -1;
   const activeSceneId = editing && project && curIdx >= 0 ? project.scenes[curIdx]?.id ?? null : null;
@@ -561,7 +562,7 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
           >
             <Ic n={ChevronLeft} size={20} mr={0} />
           </button>
-          <img className="tb-logo" src="/brand/logo.png" alt="Video Creator" title="Video Creator" />
+          <img className="tb-logo" src={withBase('/brand/logo.png')} alt="Video Creator" title="Video Creator" />
           <div className="doc-title">
             <input value={project.title} onChange={(e) => update((p) => void (p.title = e.target.value))} aria-label="タイトル" />
             <span className="status" style={saveState === 'error' ? { color: 'var(--red)' } : undefined}>

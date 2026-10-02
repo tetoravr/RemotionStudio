@@ -12,6 +12,7 @@ import type { RunJob, Update } from '../pages/Editor';
 import { SCENE_META } from '../sceneMeta';
 import { Field, MenuItem, Popover, Seg, Text } from './Fields';
 import { EmojiPicker, POSE_LABELS, PosePicker, SpeakerPicker, TagPicker } from './pickers';
+import { withBase } from '../base';
 
 const STYLE_LABELS: Record<Line['style'], string> = { bubble: '吹き出し', 'bubble-accent': '強調', caption: '字幕', none: '声のみ' };
 const rid = () => Math.random().toString(36).slice(2, 8);
@@ -35,7 +36,7 @@ export const LinesPanel: React.FC<{
   const listRef = useRef<HTMLDivElement>(null);
   const play = (src: string) => {
     audioRef.current?.pause();
-    audioRef.current = new Audio(`/files/${project.id}/${src}?t=${Date.now()}`);
+    audioRef.current = new Audio(withBase(`/files/${project.id}/${src}?t=${Date.now()}`));
     audioRef.current.play();
   };
   const activeId = timing?.lines.find((lt) => localFrame >= lt.start && localFrame < lt.end)?.line.id ?? null;

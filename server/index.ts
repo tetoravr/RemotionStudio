@@ -31,12 +31,13 @@ const app = express();
 // リバースプロキシ（Cloudflare Tunnel・ロードバランサ等）の内側で動かす時に、https やクライアントIPを正しく扱う
 app.set('trust proxy', 1);
 app.disable('x-powered-by');
-app.use((_req, res, next) => {
+app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Referrer-Policy', 'same-origin');
+  // ログインが要る中身は、前段の CDN（ポータルからのリライト経由など）に残さない
+  if (/^\/(api|auth|files)\//.test(req.path)) res.setHeader('Cache-Control', 'private, no-store');
   next();
 });
-app.get('/healthz', (_req, res) => res.json({ ok: true }));
 app.use(authRouter());
 // ここから下は、ログインが必要（Google ログインを設定した時だけ有効）
 app.use(requireLogin);
@@ -139,7 +140,7 @@ app.get('/api/projects/:id/renders', h(async (req, res) => {
   const files = fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => f.endsWith('.mp4')) : [];
   res.json(
     files
-      .map((f) => ({ name: f, url: `/files/${param(req, 'id')}/renders/${f}`, size: fs.statSync(path.join(dir, f)).size, at: fs.statSync(path.join(dir, f)).mtimeMs }))
+      .map((f) => ({ name: f, url: `${config.basePath}/files/${param(req, 'id')}/renders/${f}`, size: fs.statSync(path.join(dir, f)).size, at: fs.statSync(path.join(dir, f)).mtimeMs }))
       .sort((a, b) => b.at - a.at),
   );
 }));
@@ -489,7 +490,7 @@ app.post(
       return;
     }
     const previews = await designVoice({ description, text: String(req.body?.text ?? '') });
-    res.json({ previews: previews.map((p) => ({ id: p.generatedVoiceId, durationSec: p.durationSec, url: `/api/tts/eleven/previews/${p.generatedVoiceId}.mp3` })) });
+    res.json({ previews: previews.map((p) => ({ id: p.generatedVoiceId, durationSec: p.durationSec, url: `${config.basePath}/api/tts/eleven/previews/${p.generatedVoiceId}.mp3` })) });
   }),
 );
 
@@ -543,7 +544,7 @@ app.post(
       return;
     }
     const c = await createCandidate({ caption: String(caption), text: sample, seed: Number.isInteger(seed) ? seed : undefined });
-    res.json({ ...c, url: `/api/tts/voice-candidates/${c.id}.wav` });
+    res.json({ ...c, url: `${config.basePath}/api/tts/voice-candidates/${c.id}.wav` });
   }),
 );
 
@@ -654,7 +655,7 @@ app.get('/api/jobs/:id', (req, res) => {
 });
 
 // ---------- 静的ファイル ----------
-app.use('/files', express.static(config.projectsDir, { fallthrough: false, maxAge: 0 }));
+app.use('/files', express.static(config.projectsDir, { fallthrough: false, cacheControl: false }));
 const dist = path.join(ROOT, 'dist');
 if (fs.existsSync(dist)) {
   app.use(express.static(dist));
@@ -675,10 +676,21 @@ if (!loopback && !authEnabled() && process.env.ALLOW_PUBLIC_WITHOUT_AUTH !== 'tr
 }
 if (authEnabled() && authProblems().length) console.warn(`  ⚠ ログイン設定の不足: ${authProblems().join(', ')}`);
 
+// BASE_PATH（例: /video-creator）の下に、画面・API・ファイルをまとめて置く。ヘルスチェックはルートのまま
+const root = express();
+root.set('trust proxy', 1);
+root.disable('x-powered-by');
+root.get('/healthz', (_req, res) => res.json({ ok: true }));
+if (config.basePath) {
+  // 末尾の / なし（/video-creator）とルートは、/video-creator/ へ。Express は末尾の / を区別しないので path で見る
+  root.use((req, res, next) => (req.path === '/' || req.path === config.basePath ? res.redirect(`${config.basePath}/`) : next()));
+}
+root.use(config.basePath || '/', app);
+
 await seedSamples();
 await emptyTrash();
-app.listen(config.port, config.host, async () => {
-  console.log(`\n  Video Creator server: http://localhost:${config.port}`);
+root.listen(config.port, config.host, async () => {
+  console.log(`\n  Video Creator server: http://localhost:${config.port}${config.basePath}/`);
   console.log(`  ログイン: ${authEnabled() ? `Google（${[...(process.env.AUTH_ALLOWED_DOMAINS ?? '').split(','), ...(process.env.AUTH_ALLOWED_EMAILS ?? '').split(',')].filter(Boolean).join(', ')}）` : 'なし（このPCだけで使う設定）'}`);
   console.log(`  OpenAI: ${hasOpenAI() ? `有効 (${config.models.text} / ${config.models.tts} / ${config.models.image})` : '未設定（.env に OPENAI_API_KEY を設定すると AI 機能が使えます）'}`);
   const provider = resolveProvider('auto');

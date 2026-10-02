@@ -71,7 +71,7 @@ export const listProjects = async (): Promise<ProjectSummary[]> => {
         scenes: p.scenes.length,
         updatedAt: p.updatedAt,
         updatedBy: p.updatedBy,
-        thumbnail: img ? (img.startsWith('lib:') ? `/${img.slice(4)}` : `/files/${p.id}/${img}`) : undefined,
+        thumbnail: img ? (img.startsWith('lib:') ? `${config.basePath}/${img.slice(4)}` : `${config.basePath}/files/${p.id}/${img}`) : undefined,
       });
     } catch {
       // 壊れたプロジェクトは一覧から除外

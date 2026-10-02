@@ -5,6 +5,7 @@ import { api } from '../api';
 import { Ic } from '../icons';
 import type { Update } from '../pages/Editor';
 import { Cell, Disclosure, FilePick, Section, Text } from './Fields';
+import { withBase } from '../base';
 
 const PRESETS: { name: string; colors: Project['brand']['colors'] }[] = [
   { name: 'ブルー', colors: { primary: '#1f5cff', dark: '#0d1b5e', accent: '#ffd93b', light: '#eaf0ff', text: '#15172b' } },
@@ -46,7 +47,7 @@ export const BrandPanel: React.FC<{ project: Project; update: Update }> = ({ pro
             <Text bare multiline rows={1} value={b.tagline} onChange={(v) => update((p) => void (p.brand.tagline = v))} placeholder="なし" />
           </Cell>
           <Cell label="ロゴ画像" sub={b.logo ? 'ロゴとエンドカードで文字の代わりに表示' : '未設定のときは文字のロゴになります（透過PNG推奨）'}>
-            {b.logo ? <img src={`/files/${project.id}/${b.logo}`} alt="" className="thumb-img" style={{ height: 36, background: '#fff', padding: 3 }} /> : null}
+            {b.logo ? <img src={withBase(`/files/${project.id}/${b.logo}`)} alt="" className="thumb-img" style={{ height: 36, background: '#fff', padding: 3 }} /> : null}
             <FilePick
               accept="image/*"
               onFile={async (f) => {

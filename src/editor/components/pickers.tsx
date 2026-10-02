@@ -6,13 +6,14 @@ import { LIBRARY_CHARACTERS } from '../../video/library';
 import { POSES, type CastMember, type Line, type Pose, type Project } from '../../video/schema';
 import { Ic } from '../icons';
 import { Popover } from './Fields';
+import { withBase } from '../base';
 
 export const POSE_LABELS: Record<string, string> = {
   default: '通常', happy: '喜び', surprised: '驚き', sad: 'しょんぼり', think: '考え中', point: '指さし', wave: '手を振る', wink: 'ウインク',
 };
 
 /** プロジェクト内パス（assets/..）・ライブラリ(lib:)・URL を、エディターで表示できるURLにする */
-export const assetUrl = (projectId: string, p: string) => (p.startsWith('lib:') ? `/${p.slice(4)}` : /^(https?:|data:|blob:|\/)/.test(p) ? p : `/files/${projectId}/${p}`);
+export const assetUrl = (projectId: string, p: string) => (p.startsWith('lib:') ? withBase(`/${p.slice(4)}`) : /^(https?:|data:|blob:|\/)/.test(p) ? p : withBase(`/files/${projectId}/${p}`));
 
 const isHuman = (m: CastMember) => (m.library ? LIBRARY_CHARACTERS[m.library]?.kind === 'human' : (m.aspect ?? 0.5) < 0.75);
 

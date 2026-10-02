@@ -18,6 +18,11 @@ services:
       mountPath: /var/data
       sizeGB: 10
     envVars:
+      # SUSHI CREATOR（https://sushi-creator.sushitop.io）の /video-creator/ からリライトで届くので、同じパスの下で動かす
+      - key: BASE_PATH
+        value: /video-creator
+      - key: PUBLIC_URL
+        value: https://sushi-creator.sushitop.io/video-creator
       - key: PROJECTS_DIR
         value: /var/data/projects
       - key: VOICES_DIR

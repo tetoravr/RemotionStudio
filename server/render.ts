@@ -103,5 +103,5 @@ export const renderProject = ({ project, serverUrl, onProgress, crf = 18 }: Rend
         onProgress?.(0.1 + progress * 0.9, `書き出し中 ${renderedFrames}/${composition.durationInFrames} フレーム`);
       },
     });
-    return { file: `/files/${project.id}/renders/${name}`, path: outputLocation, durationSec: composition.durationInFrames / composition.fps };
+    return { file: `${config.basePath}/files/${project.id}/renders/${name}`, path: outputLocation, durationSec: composition.durationInFrames / composition.fps };
   });
