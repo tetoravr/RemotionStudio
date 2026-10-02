@@ -1,0 +1,41 @@
+# Render の Blueprint（https://render.com/docs/blueprint-spec）。手順は docs/deploy.md の「C. Render で動かす」
+# API キーなどの秘密の値は、このファイルには書かない（sync: false の項目は、Render の画面で入力する）
+services:
+  - type: web
+    name: video-creator
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    branch: main
+    # main に push すると、Render がこのリポジトリから Docker イメージをビルドしてデプロイする
+    autoDeployTrigger: commit
+    region: singapore
+    # 書き出し（ヘッドレス Chromium）にメモリが要るので 2GB 以上。書き出しを速くしたい時は pro（4GB・2CPU）
+    plan: standard
+    healthCheckPath: /healthz
+    # プロジェクト・声の対応表・製品の画面は、デプロイし直しても消えないディスクに置く
+    disk:
+      name: data
+      mountPath: /var/data
+      sizeGB: 10
+    envVars:
+      - key: PROJECTS_DIR
+        value: /var/data/projects
+      - key: VOICES_DIR
+        value: /var/data/voices
+      - key: UI_LIBRARY_DIR
+        value: /var/data/ui
+      # ---- 秘密の値（Render の画面で入力） ----
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: ELEVENLABS_API_KEY
+        sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      # ---- ログイン ----
+      - key: AUTH_ALLOWED_DOMAINS
+        value: tetoravr.com
+      # セッションの署名用（Render が作る）
+      - key: SESSION_SECRET
+        generateValue: true
