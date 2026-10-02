@@ -2,11 +2,13 @@ import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { irodoriCaption, narrationHash, type TtsProvider } from '../../src/video/narrationKey';
+import { stripAudioTags } from '../../src/video/audioTags';
+import { elevenSpeechText, irodoriCaption, narrationHash, plainSpeechText, type TtsProvider } from '../../src/video/narrationKey';
 import type { AudioSettings, CastMember, Line } from '../../src/video/schema';
 import { config } from '../env';
 import { runFfmpeg, wavDurationSec } from '../ffmpeg';
 import { getOpenAI } from './client';
+import { synthEleven } from './elevenlabs';
 import { applyEq, bandProfile, correctionCurve, EQ_ENABLED, eqKey, loadEq, saveEq } from './voiceEq';
 import { ensureVoice, localVoiceFile, localVoices } from './voices';
 
@@ -32,11 +34,21 @@ export type { TtsProvider };
 
 const IRODORI_FALLBACK_URL = 'http://127.0.0.1:8088';
 
-/** 声は Irodori-TTS 固定（OpenAI TTS は不採用）。設定値は互換のため受け取るだけで無視する */
-export const resolveProvider = (_setting: AudioSettings['ttsProvider'] = 'auto'): TtsProvider => 'irodori';
+/**
+ * 使う音声エンジン。サーバーの設定（TTS_PROVIDER）で決まり、既定は ElevenLabs。
+ * プロジェクトの ttsProvider は以前の版の値が残っていることがあるので、互換のため受け取るだけで使わない
+ */
+export const resolveProvider = (_setting: AudioSettings['ttsProvider'] = 'auto'): TtsProvider => {
+  const p = config.tts.provider;
+  return p === 'irodori' || p === 'openai' ? p : 'elevenlabs';
+};
 
 /** 音声の同一性キーに入れるエンジン ID */
-export const engineId = (provider: TtsProvider) => (provider === 'irodori' ? `irodori:${config.tts.irodoriModel}` : config.models.tts);
+export const engineId = (provider: TtsProvider) =>
+  provider === 'elevenlabs' ? `elevenlabs:${config.eleven.model}` : provider === 'irodori' ? `irodori:${config.tts.irodoriModel}` : config.models.tts;
+
+/** エンジンに送る読み上げ文。ElevenLabs はタグ付き、ほかはタグを外す */
+export const ttsText = (line: Line, provider: TtsProvider) => (provider === 'elevenlabs' ? elevenSpeechText(line) : plainSpeechText(line));
 
 export const lineHash = (line: Line, voice: CastMember['voice'], provider: TtsProvider) => narrationHash(line, voice, engineId(provider));
 
@@ -322,8 +334,8 @@ export type SynthOptions = {
   seed?: number;
 };
 
-/** 読み上げる文字数（記号・空白を除く） */
-export const spokenChars = (text: string) => text.replace(/[\s、。，．,.！？!?…・「」『』（）()ー〜~"'“”]/g, '').length;
+/** 読み上げる文字数（記号・空白・オーディオタグを除く） */
+export const spokenChars = (text: string) => stripAudioTags(text).replace(/[\s、。，．,.！？!?…・「」『』（）()ー〜~"'“”]/g, '').length;
 
 /** 文字数と話速から見た、自然な長さ（秒）の目安 */
 export const expectedSpeechSec = (text: string, speed = 1) => spokenChars(text) / (7 * Math.max(0.5, speed)) + 0.35;
@@ -477,7 +489,9 @@ export const voiceEqFor = async (refVoice: string | undefined): Promise<number[]
 export const synthesizeToFile = async (text: string, voice: CastMember['voice'], out: string, opts: SynthOptions = {}) => {
   const outFile = path.resolve(out);
   const provider = opts.provider ?? resolveProvider();
-  const { samples: raw, rate } = provider === 'irodori' ? await synthIrodori(text, voice, opts) : await synthOpenAI(text, voice, opts.delivery);
+  const synth = (o: SynthOptions) =>
+    provider === 'elevenlabs' ? synthEleven(text, voice, { seed: o.seed }) : provider === 'irodori' ? synthIrodori(text, voice, o) : synthOpenAI(text, voice, o.delivery);
+  const { samples: raw, rate } = await synth(opts);
   if (!raw.length) throw new Error('音声が空でした');
   let cleaned = trimAndNormalize(raw, rate);
   // Irodori は、まれに間延びしたり途中で詰まったりする。文字数に対して長すぎる時は、シードを変えて作り直し、一番自然な長さのものを使う
@@ -491,7 +505,17 @@ export const synthesizeToFile = async (text: string, voice: CastMember['voice'],
       if (retry.rate === rate && off(c) < off(cleaned)) cleaned = c;
     }
   }
-  // 話速はどちらのエンジンも生成時に反映済み（Irodori は duration_scale、OpenAI は speed）
+  // ElevenLabs もまれに、読み終えたあとに余計な声を足して長くなることがある。極端に長い時だけ1回作り直す（クレジットを使うので控えめに）
+  if (provider === 'elevenlabs') {
+    const expected = expectedSpeechSec(text, 1.1);
+    const len = (s: Float32Array) => s.length / rate;
+    if (len(cleaned) > expected * 2.2 + 1) {
+      const retry = await synth({ ...opts, seed: crypto.randomInt(1, 2_000_000_000) });
+      const c = trimAndNormalize(retry.samples, retry.rate);
+      if (retry.rate === rate && Math.abs(Math.log(len(c) / expected)) < Math.abs(Math.log(len(cleaned) / expected))) cleaned = c;
+    }
+  }
+  // 話速はどのエンジンも生成時に反映済み（ElevenLabs は speed と伸縮、Irodori は duration_scale、OpenAI は speed）
   await fs.mkdir(path.dirname(outFile), { recursive: true });
   // 参照音声の声は、コーデックで弱まった高い音域を参照音声に合わせて戻す
   const gains = provider === 'irodori' ? await voiceEqFor(voice.refVoice) : null;

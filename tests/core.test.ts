@@ -1,25 +1,92 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import http from 'node:http';
+import type { AddressInfo } from 'node:net';
+import os from 'node:os';
+import path from 'node:path';
 import { test } from 'node:test';
 import { aiToScenes, type AiStoryboard } from '../server/ai/storyboard';
 import { detectMouthRegion } from '../server/ai/mouth';
-import { engineId, mouthEnvelope, readWavSamples, resolveProvider, trimAndNormalize } from '../server/ai/tts';
+import { encodeWav, engineId, mouthEnvelope, readWavSamples, resolveProvider, synthesizeToFile, trimAndNormalize } from '../server/ai/tts';
+import { config } from '../server/env';
 import { LIBRARY_CHARACTERS, libraryCastMember } from '../src/video/library';
 import { parseRich, fitFontSize } from '../src/video/components/RichText';
 import { adaptForFormat } from '../src/video/adapt';
 import { collectSfx } from '../src/video/events';
 import { applyTextTarget, migrateLayouts, normalizeAdjust, readAdjust, sceneElementIds, sceneLayout, setSceneLayout } from '../src/video/edit/textEdit';
-import { irodoriCaption, isAudioStale, narrationHash, voiceFor } from '../src/video/narrationKey';
+import { autoTags, elevenVoiceKey, lineTags, normalizeTag, stripAudioTags, withAudioTags } from '../src/video/audioTags';
+import { elevenSpeechText, irodoriCaption, isAudioStale, narrationHash, plainSpeechText, voiceFor } from '../src/video/narrationKey';
 import { Project } from '../src/video/schema';
 import { blankProject, DEFAULT_CAST } from '../src/video/templates';
-import { computeTimeline } from '../src/video/timeline';
+import { computeTimeline, lineDurationSec } from '../src/video/timeline';
 
 const sample = Project.parse(JSON.parse(fs.readFileSync('public/samples/sushitop-ocr/project.json', 'utf8')));
 
 test('サンプルプロジェクトがスキーマに適合し、全セリフに音声がある', () => {
   assert.equal(sample.scenes.length, 8);
   for (const s of sample.scenes) for (const l of s.lines) assert.ok(l.audio, `${l.id} has audio`);
-  for (const s of sample.scenes) for (const l of s.lines) assert.equal(isAudioStale(l, sample.cast, engineId(resolveProvider(sample.audio.ttsProvider))), false, `${l.id} is fresh`);
+  // 同梱の音声は、ElevenLabs（既定）か、以前の Irodori-TTS のどちらかで作られていて、今の台本と一致している
+  const engines = [engineId('elevenlabs'), engineId('irodori')];
+  for (const s of sample.scenes) for (const l of s.lines) assert.ok(engines.some((e) => !isAudioStale(l, sample.cast, e)), `${l.id} is fresh`);
+});
+
+test('音声エンジン: 既定は ElevenLabs（Eleven v3）', () => {
+  assert.equal(resolveProvider('auto'), 'elevenlabs');
+  // 以前の版でプロジェクトに残っている設定は使わない
+  assert.equal(resolveProvider('irodori'), 'elevenlabs');
+  assert.match(engineId('elevenlabs'), /^elevenlabs:eleven_v3/);
+});
+
+test('オーディオタグ: 演技指示・絵文字から自動で付き、選んだタグが優先される', () => {
+  assert.deepEqual(autoTags({ emoji: '😲', delivery: 'ワクワクして、自信たっぷりに' }), ['surprised', 'excited']);
+  assert.deepEqual(autoTags({ delivery: '困り顔で小声で' }), ['confused', 'whispers']);
+  assert.deepEqual(autoTags({}), []);
+  // 選んだタグ（[] はタグなし）は自動より優先。表記ゆれは直す
+  assert.deepEqual(lineTags({ tags: ['Sighs', '[sad]'], delivery: '元気よく' }), ['sighs', 'sad']);
+  assert.deepEqual(lineTags({ tags: [], delivery: '元気よく' }), []);
+  assert.equal(normalizeTag('[laughs softly]'), 'laughs softly');
+  assert.equal(normalizeTag('笑う'), '');
+});
+
+test('オーディオタグ: ElevenLabs にはタグ付き、ほかのエンジンにはタグを外して送る', () => {
+  const line = { id: 'x', speaker: 'saki', text: 'だったら、[[SUSHI TOP OCR]]！', style: 'bubble' as const, tags: ['excited'] };
+  assert.equal(elevenSpeechText(line), '[excited] だったら、SUSHI TOP OCR！');
+  const inline = { ...line, tags: [] as string[], speak: 'えっ、[laughs] ほんとに？' };
+  assert.equal(elevenSpeechText(inline), 'えっ、[laughs] ほんとに？');
+  assert.equal(plainSpeechText(inline), 'えっ、 ほんとに？');
+  // 強調の [[ ]] はタグとして扱わない
+  assert.equal(stripAudioTags('[[レシート]]を[sighs]撮る'), '[[レシート]]を撮る');
+  assert.equal(withAudioTags('こんにちは', ['cheerfully', 'warmly']), '[cheerfully] [warmly] こんにちは');
+});
+
+test('ElevenLabs: タグ・声・話速・表現の幅が変わると音声は古い扱いになる', () => {
+  const line = sample.scenes[1].lines[0];
+  const voice = voiceFor(line.speaker, sample.cast);
+  const engine = 'elevenlabs:eleven_v3';
+  const base = narrationHash(line, voice, engine);
+  assert.notEqual(base, narrationHash({ ...line, tags: ['gasps'] }, voice, engine), 'tags');
+  assert.notEqual(base, narrationHash(line, { ...voice, eleven: { voiceId: 'abc' } }, engine), 'voice');
+  assert.notEqual(base, narrationHash(line, { ...voice, eleven: { speed: 1.25 } }, engine), 'speed');
+  assert.notEqual(base, narrationHash(line, { ...voice, eleven: { stability: 'creative' } }, engine), 'stability');
+  assert.notEqual(base, narrationHash(line, voice, 'elevenlabs:eleven_v4'), 'model');
+  // Irodori 用の項目（シード・キャプション）は ElevenLabs の音声に影響しない
+  assert.equal(base, narrationHash(line, { ...voice, seed: 999 }, engine));
+  // タグを選んでいれば、演技指示を書き換えても作り直さない
+  const tagged = { ...line, tags: ['confident'] };
+  assert.equal(narrationHash(tagged, voice, engine), narrationHash({ ...tagged, delivery: 'しょんぼり' }, voice, engine));
+  // 既定の声は、そのキャラの標準の声（参照音声）をクローンした声（以前のプロジェクトで参照音声が未設定でも）
+  assert.equal(voice.refVoice, undefined);
+  assert.equal(elevenVoiceKey(voice), 'ref:osushi-chan');
+  assert.equal(elevenVoiceKey({ ...voice, library: undefined }), `design:${voice.caption}`);
+});
+
+test('タイムライン: 文中のタグは読み上げ時間の見積もりに数えない', () => {
+  const p = Project.parse(blankProject({ id: 'x', title: 't', brandName: 'テスト' }));
+  const l = p.scenes[0].lines[0] ?? p.scenes.flatMap((s) => s.lines)[0];
+  l.audio = undefined;
+  const plain = lineDurationSec({ ...l, speak: 'こんにちは、よろしくね' }, p);
+  const tagged = lineDurationSec({ ...l, speak: '[laughs] こんにちは、[sighs] よろしくね' }, p);
+  assert.equal(plain, tagged);
 });
 
 test('タイムライン: シーンが連続し、切り替えが8分音符グリッドに乗る', () => {
@@ -113,7 +180,7 @@ test('AI出力をシーンに変換し、不正な値は補正・除外する', 
       {
         type: 'feature',
         transition: 'wipe',
-        lines: [{ speaker: 'unknown', text: 'やあ', speak: null, delivery: null, emoji: null, pose: null, style: 'bubble' }],
+        lines: [{ speaker: 'unknown', text: 'やあ', speak: null, delivery: null, tags: ['excited', 'not-a-tag', 'excited', 'sighs', 'happy'], pose: null, style: 'bubble' }],
         characters: [{ id: 'saki', pose: 'happy', position: 'left', size: 'm', enter: 'pop', enterDelaySec: 9 }],
         eyebrow: '[[A]]で',
         headline: 'B！',
@@ -142,6 +209,9 @@ test('AI出力をシーンに変換し、不正な値は補正・除外する', 
   assert.equal(f.type, 'feature');
   assert.equal(f.lines[0].speaker, 'narrator');
   assert.equal(f.lines[0].style, 'caption');
+  // タグは一覧にあるものだけ・重複なし・最大2つ。Irodori 用に最初のタグに合う絵文字も入る
+  assert.deepEqual(f.lines[0].tags, ['excited', 'sighs']);
+  assert.equal(f.lines[0].emoji, '😆');
   assert.equal(f.characters[0].enterDelaySec, 2);
   // イラストは後で画像AIが描く（指示文だけ持つ）、画面はUIライブラリを参照する
   if (f.type === 'feature' && f.visual.kind === 'image') assert.deepEqual([f.visual.src, f.visual.prompt], ['', '受付で笑顔のスタッフ']);
@@ -417,4 +487,69 @@ test('音色補正: 補正なしなら元のまま、高音域を上げると高
   assert.ok(Math.abs(r500 - 1) < 0.08, `500Hz unchanged ${r500}`);
   assert.ok(r9k > 1.7 && r9k < 2.3, `9kHz boosted ~+6dB ${r9k}`);
   assert.equal(bandProfile(new Float32Array(10), rate).length, 10);
+});
+
+test('ElevenLabs: タグ付きの文と声の設定を送り、標準の声は初回だけクローンする（模擬サーバー）', async () => {
+  const reqs: { url: string; body: string; key?: string }[] = [];
+  let ttsCalls = 0;
+  const rate = 44100;
+  const tone = new Float32Array(rate);
+  for (let i = 4000; i < 30000; i++) tone[i] = Math.sin(i / 8) * 0.3;
+  const wav = encodeWav(tone, rate);
+  const server = http.createServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on('data', (c) => chunks.push(c));
+    req.on('end', () => {
+      reqs.push({ url: req.url ?? '', body: Buffer.concat(chunks).toString('utf8'), key: req.headers['xi-api-key'] as string });
+      res.setHeader('content-type', 'application/json');
+      if (req.url === '/v1/voices/add') return void res.end(JSON.stringify({ voice_id: `cloned${reqs.length}`, requires_verification: false }));
+      if (req.url?.startsWith('/v1/text-to-speech/')) {
+        ttsCalls++;
+        // 2回目は「声が消えた」ことにする → 作り直して1回だけやり直すはず
+        if (ttsCalls === 2) return void ((res.statusCode = 404), res.end(JSON.stringify({ detail: { code: 'voice_not_found', message: 'gone' } })));
+        res.setHeader('content-type', 'audio/mpeg');
+        return void res.end(wav);
+      }
+      res.statusCode = 404;
+      res.end('{}');
+    });
+  });
+  await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+  const saved = { ...config.eleven };
+  const savedDir = config.voicesDir;
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'eleven-test-'));
+  Object.assign(config.eleven, { apiKey: 'test-key', baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, model: 'eleven_v3', language: 'ja' });
+  config.voicesDir = tmp;
+  try {
+    const voice = { ...libraryCastMember('hayami-saki').voice, refVoice: undefined, library: 'hayami-saki' };
+    const r1 = await synthesizeToFile('[excited] だったら、スシトップ！', voice, path.join(tmp, 'a.wav'), { provider: 'elevenlabs' });
+    assert.ok(r1.durationSec > 0.3 && fs.existsSync(path.join(tmp, 'a.wav')));
+    const clones = () => reqs.filter((x) => x.url === '/v1/voices/add');
+    assert.equal(clones().length, 1, 'standard voice cloned once');
+    assert.match(clones()[0].body, /速水さき/);
+    const tts = reqs.find((x) => x.url.startsWith('/v1/text-to-speech/'))!;
+    assert.equal(tts.url, '/v1/text-to-speech/cloned1?output_format=mp3_44100_128');
+    assert.equal(tts.key, 'test-key');
+    const body = JSON.parse(tts.body);
+    assert.equal(body.text, '[excited] だったら、スシトップ！');
+    assert.equal(body.model_id, 'eleven_v3');
+    assert.equal(body.language_code, 'ja');
+    assert.equal(body.voice_settings.stability, 0.5);
+    assert.equal(body.voice_settings.speed, 1.1);
+    // 声が消えていたら、作り直して続ける
+    await synthesizeToFile('えっ、すごい！', voice, path.join(tmp, 'b.wav'), { provider: 'elevenlabs' });
+    assert.equal(clones().length, 2, 're-cloned after voice_not_found');
+    // 以後は覚えた声を使う（作り直さない）
+    await synthesizeToFile('いいね〜！', { ...voice, eleven: { stability: 'creative', speed: 1.3 } }, path.join(tmp, 'c.wav'), { provider: 'elevenlabs' });
+    assert.equal(clones().length, 2, 'cached voice reused');
+    const last = JSON.parse(reqs.filter((x) => x.url.startsWith('/v1/text-to-speech/')).at(-1)!.body);
+    assert.equal(last.voice_settings.stability, 0);
+    // 1.2 を超える速さは、ElevenLabs の上限で作ってから伸縮する
+    assert.equal(last.voice_settings.speed, 1.2);
+  } finally {
+    Object.assign(config.eleven, saved);
+    config.voicesDir = savedDir;
+    server.close();
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
 });

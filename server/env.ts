@@ -21,15 +21,29 @@ export const config = {
     /** 図解イラスト（課題の説明など）。文字なしのフラットな図解に強いモデル */
     illustration: process.env.OPENAI_ILLUSTRATION_MODEL || 'gpt-image-2.5-sunburst',
   },
-  /** 音声合成。provider=auto は IRODORI_TTS_URL があれば Irodori-TTS、なければ OpenAI */
+  /** 音声合成。provider=auto は ElevenLabs（TTS_PROVIDER=irodori / openai で切り替え） */
   tts: {
-    provider: (process.env.TTS_PROVIDER || 'auto') as 'auto' | 'openai' | 'irodori',
+    provider: (process.env.TTS_PROVIDER || 'auto') as 'auto' | 'elevenlabs' | 'openai' | 'irodori',
     irodoriUrl: (process.env.IRODORI_TTS_URL || '').replace(/\/+$/, ''),
     irodoriModel: process.env.IRODORI_TTS_MODEL || 'irodori-tts',
     irodoriKey: process.env.IRODORI_TTS_API_KEY || '',
     irodoriSteps: process.env.IRODORI_NUM_STEPS ? Number(process.env.IRODORI_NUM_STEPS) : undefined,
     /** 1セリフの生成待ち時間の上限（CPU だと数十秒かかる） */
     irodoriTimeoutMs: Number(process.env.IRODORI_TIMEOUT_SEC || 600) * 1000,
+  },
+  /** ElevenLabs（ナレーションの既定のエンジン） */
+  eleven: {
+    apiKey: process.env.ELEVENLABS_API_KEY || process.env.XI_API_KEY || '',
+    /** API の接続先（EU などのデータ所在地を使う時だけ変える） */
+    baseUrl: (process.env.ELEVENLABS_BASE_URL || 'https://api.elevenlabs.io').replace(/\/+$/, ''),
+    /** 読み上げのモデル。オーディオタグが使える eleven_v3 が既定 */
+    model: process.env.ELEVENLABS_MODEL || 'eleven_v3',
+    /** 声のデザイン（声のイメージから声を作る）のモデル */
+    designModel: process.env.ELEVENLABS_DESIGN_MODEL || 'eleven_ttv_v3',
+    /** 読み上げの言語（ISO 639-1）。空にすると自動判定 */
+    language: process.env.ELEVENLABS_LANGUAGE ?? 'ja',
+    /** 同時に作るセリフの数（プランの同時実行数の上限より小さく） */
+    concurrency: Number(process.env.ELEVENLABS_CONCURRENCY || 3),
   },
   imageQuality: (process.env.OPENAI_IMAGE_QUALITY || 'medium') as 'low' | 'medium' | 'high',
   browserExecutable: process.env.REMOTION_BROWSER_EXECUTABLE || null,

@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { IRODORI_EMOJI } from '../../src/video/emotions';
+import { AUDIO_TAGS, EMOJI_TAG, lineTags } from '../../src/video/audioTags';
 import {
   BACKGROUNDS, ICON_NAMES, POSES, Scene as SceneSchema, TRANSITIONS, Visual,
   type CastMember, type IconName, type Line, type Project, type Scene,
@@ -47,7 +47,7 @@ const buildSchema = (castIds: string[], uiFiles: string[] = []) => {
     text: str,
     speak: nullable(str),
     delivery: nullable(str),
-    emoji: nullable(enumOf(IRODORI_EMOJI.map((e) => e.emoji))),
+    tags: arr(enumOf(AUDIO_TAGS.map((t) => t.tag))),
     pose: nullable(pose),
     style: enumOf(['bubble', 'bubble-accent', 'caption', 'none']),
   });
@@ -166,7 +166,10 @@ const SYSTEM = `あなたは日本のSNS縦型動画広告（TikTok/リール/�
 - 表示テキストの改行は "\\n" で明示。1行は全角12文字以内。
 - speak（読み上げ用テキスト）は基本 null。読み間違えやすい語（英字の語・ブランド名・難読語）を含む時だけ、句読点・！？はそのまま残し、その語だけを読み方に直して入れる。**英字の語はカタカナ**にする（例: 「LINEで！」→「ラインで！」、「だったら、SUSHI TOP OCR！」→「だったら、スシトップ オーシーアール！」）。ひらがなにしない。文全体をひらがなにしたり、スペースで細切れにしない（不自然な棒読みになる）。
 - delivery（演技指示）は各セリフの気持ちを短く書く（例: 「元気よく」「驚いて」「困り顔で小声で」「ワクワクして」）。単調な読み上げを避けるため、すべてのセリフに付ける。
-- emoji は音声合成（Irodori-TTS）用の感情の絵文字。8文字以上で、感情がはっきりしたセリフ（驚き😲・困りごと😟・安堵😌・力強い宣言💪など）にだけ入れ、普通のセリフは null。短いセリフや、特徴を読み上げるセリフ（style:"none"）には付けない（笑い声や息の音が混ざりやすい）。😆・🤭（笑い）は使わない。多用しない（全体の2割以下）。
+- tags は音声合成（ElevenLabs）のオーディオタグ。セリフの前に付き、その気持ち・話し方で読まれる。一覧から0〜2個選ぶ（${AUDIO_TAGS.map((t) => `${t.tag}=${t.label}`).join('、')}）。
+  - 気持ちがはっきりしたセリフには必ず付ける（問いかけ・驚き→surprised/curious、困りごと→worried/frustrated/sighs、解決・安堵→relieved/excited、自信のある宣言→confident、行動の呼びかけ→cheerfully/energetic など）。
+  - 声の演技（laughs・chuckles・sighs・gasps・exhales）は、その場面で自然な時だけ1つまで（全体で2〜3回まで）。crying・shouts・whispers・dramatically は広告では原則使わない。
+  - 特徴を淡々と読み上げるセリフ（style:"none"）は [] か confident/cheerfully の1つだけ。同じタグを全セリフに付けない（単調になる）。
 - cta の notes は視聴者向けの注記（β版・画面はイメージ・条件など）だけ。ブリーフの「注意事項」に書かれた制作上の指示（〜は載せない、〜を伝える 等）を注記として画面に書かない。
 - 事実はブリーフにある情報だけを使う。数字・実績を捏造しない（ブリーフに無ければ counter は使わない）。条件付きの主張には footnote で注記。
 - ブランド名は必ずブリーフの表記どおり。
@@ -210,7 +213,7 @@ const briefText = (b: Brief) =>
     .filter(Boolean)
     .join('\n');
 
-type AiLine = { speaker: string; text: string; speak: string | null; delivery: string | null; emoji: string | null; pose: string | null; style: Line['style'] };
+type AiLine = { speaker: string; text: string; speak: string | null; delivery: string | null; tags?: string[] | null; pose: string | null; style: Line['style'] };
 type AiVisual = {
   kind: string;
   uiFile: string | null;
@@ -241,6 +244,11 @@ const toVisual = (v: AiVisual | undefined): Visual => {
   return r.success ? r.data : { kind: 'none' };
 };
 
+const TAG_SET = new Set(AUDIO_TAGS.map((t) => t.tag));
+/** AI が選んだタグ（一覧にあるものだけ・最大2つ）。指定が無い時は undefined（演技指示から自動） */
+const aiTags = (tags: string[] | null | undefined) => (Array.isArray(tags) ? [...new Set(tags.filter((t) => TAG_SET.has(t)))].slice(0, 2) : undefined);
+const tagEmoji = (tag: string | undefined) => (tag ? Object.entries(EMOJI_TAG).find(([, t]) => t === tag)?.[0] : undefined);
+
 /** AI出力 → プロジェクトのシーン配列（zod で検証・デフォルト補完） */
 export const aiToScenes = (ai: AiStoryboard, cast: CastMember[]): Scene[] => {
   const ids = new Set(cast.map((c) => c.id));
@@ -255,7 +263,9 @@ export const aiToScenes = (ai: AiStoryboard, cast: CastMember[]): Scene[] => {
       text: l.text,
       speak: nn(l.speak) || undefined,
       delivery: nn(l.delivery) || undefined,
-      emoji: nn(l.emoji) || undefined,
+      tags: aiTags(l.tags),
+      // Irodori-TTS で読む時のために、最初のタグに合う感情の絵文字も入れておく
+      emoji: tagEmoji(aiTags(l.tags)?.[0]),
       pose: nn(l.pose) || undefined,
       style: !ids.has(l.speaker) && l.style.startsWith('bubble') ? 'caption' : l.style,
     }));
@@ -307,7 +317,8 @@ export const aiToScenes = (ai: AiStoryboard, cast: CastMember[]): Scene[] => {
 export const scenesToAi = (scenes: Scene[]) =>
   scenes.map((s) => {
     const { id: _id, lines, screenshot: _sc, screenshotSize: _ss, ...rest } = s as Scene & Record<string, unknown>;
-    return { ...rest, lines: lines.map(({ id: _l, audio: _a, ...l }) => l) };
+    // AI には、いま実際に使っているタグ（自動で付いたものを含む）を見せる
+    return { ...rest, lines: lines.map(({ id: _l, audio: _a, emoji: _e, tags, ...l }) => ({ ...l, tags: lineTags({ tags, emoji: _e, delivery: l.delivery }) })) };
   });
 
 const callModel = async (system: string, user: string, cast: CastMember[], uiFiles: string[] = []): Promise<AiStoryboard> => {

@@ -1,3 +1,4 @@
+import { elevenSettings, elevenVoiceKey, lineTags, stripAudioTags, withAudioTags, type VoiceWithLibrary } from './audioTags';
 import { DEFAULT_VOICE_SPEED, type CastMember, type Line } from './schema';
 
 /** 53bit の軽量ハッシュ（サーバー・エディター共通で使う） */
@@ -20,16 +21,27 @@ export const NARRATOR_VOICE: CastMember['voice'] = {
   speed: DEFAULT_VOICE_SPEED,
 };
 
-export const voiceFor = (speaker: string, cast: CastMember[]): CastMember['voice'] =>
-  cast.find((c) => c.id === speaker)?.voice ?? NARRATOR_VOICE;
+/** 話者の声。ライブラリのキャラは library も付ける（ElevenLabs で標準の声を使うため。ほかのエンジンの同一性には影響しない） */
+export const voiceFor = (speaker: string, cast: CastMember[]): VoiceWithLibrary => {
+  const m = cast.find((c) => c.id === speaker);
+  return m ? { ...m.voice, library: m.library } : NARRATOR_VOICE;
+};
 
-/** 読み上げ用テキスト（[[ ]] や改行を除去） */
+/** 読み上げ用テキスト（[[ ]] や改行を除去）。文中に書いたオーディオタグ（[laughs] など）は残す */
 export const speechText = (line: Line) => (line.speak || line.text).replace(/\[\[|\]\]/g, '').replace(/\n/g, '');
 
-export type TtsProvider = 'openai' | 'irodori';
+/** タグを読めないエンジン（Irodori-TTS・OpenAI）向けに、文中のタグも外した読み上げ文 */
+export const plainSpeechText = (line: Line) => stripAudioTags(speechText(line));
+
+/** ElevenLabs に送る読み上げ文（先頭にこのセリフのタグを付ける） */
+export const elevenSpeechText = (line: Line) => withAudioTags(speechText(line), lineTags(line));
+
+export type TtsProvider = 'elevenlabs' | 'openai' | 'irodori';
 
 /** Irodori-TTS のエンジン ID は `irodori:` で始まる */
 export const isIrodoriEngine = (engine: string) => engine.startsWith('irodori');
+/** ElevenLabs のエンジン ID は `elevenlabs:` で始まる */
+export const isElevenEngine = (engine: string) => engine.startsWith('elevenlabs');
 
 /** Irodori-TTS に渡す声の指定。参照音声があるときはキャプションと衝突しやすいので、キャプションは感情の指示だけにする */
 export const irodoriCaption = (voice: CastMember['voice'], delivery?: string) => {
@@ -39,17 +51,22 @@ export const irodoriCaption = (voice: CastMember['voice'], delivery?: string) =>
 };
 
 /**
- * セリフ音声の同一性キー。文言・声・話速・エンジンが変わったら再生成が必要。
- * @param engine 'gpt-4o-mini-tts'（OpenAI のモデル名）または 'irodori:<モデル>'
+ * セリフ音声の同一性キー。文言・タグ・声・話速・エンジンが変わったら再生成が必要。
+ * @param engine 'elevenlabs:<モデル>'、'irodori:<モデル>'、または OpenAI のモデル名
  */
-export const narrationHash = (line: Line, voice: CastMember['voice'], engine: string) =>
-  cyrb53(
+export const narrationHash = (line: Line, voice: CastMember['voice'], engine: string) => {
+  if (isElevenEngine(engine)) {
+    const e = elevenSettings(voice);
+    return cyrb53(JSON.stringify([elevenSpeechText(line), elevenVoiceKey(voice), e.speed, e.stability, engine]));
+  }
+  return cyrb53(
     JSON.stringify(
       isIrodoriEngine(engine)
-        ? [speechText(line), line.emoji ?? '', irodoriCaption(voice, line.delivery), voice.seed ?? null, voice.refVoice ?? '', voice.speed, engine]
-        : [speechText(line), line.delivery ?? '', voice.voice, voice.instructions, voice.speed, engine],
+        ? [plainSpeechText(line), line.emoji ?? '', irodoriCaption(voice, line.delivery), voice.seed ?? null, voice.refVoice ?? '', voice.speed, engine]
+        : [plainSpeechText(line), line.delivery ?? '', voice.voice, voice.instructions, voice.speed, engine],
     ),
   );
+};
 
 export const isAudioStale = (line: Line, cast: CastMember[], engine: string) =>
-  Boolean(speechText(line).trim()) && (!line.audio || line.audio.hash !== narrationHash(line, voiceFor(line.speaker, cast), engine));
+  Boolean(plainSpeechText(line).trim()) && (!line.audio || line.audio.hash !== narrationHash(line, voiceFor(line.speaker, cast), engine));

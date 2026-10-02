@@ -600,7 +600,7 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
               {!tts.ready ? (
                 <>
                   <span className="dot danger" />
-                  <span>音声エンジン（Irodori-TTS）に接続できません</span>
+                  <span>{tts.problem}</span>
                   <button className="btn sm plain" onClick={() => setTab('sound')}>
                     詳しく
                   </button>

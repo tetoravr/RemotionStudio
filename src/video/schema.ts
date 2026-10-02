@@ -65,8 +65,13 @@ export const Line = z.object({
   pose: Pose.optional(),
   /** 演技指示（声のトーン）。例: 「驚いて」「落ち込んで小声で」「元気よく」 */
   delivery: z.string().optional(),
-  /** Irodori-TTS 用の感情・非言語の絵文字（セリフの前に付けて読み上げる）。例: 😲 😆 🥺 */
+  /** Irodori-TTS 用の感情・非言語の絵文字（以前の形式。ElevenLabs ではタグに変換して使う）。例: 😲 😆 🥺 */
   emoji: z.string().optional(),
+  /**
+   * ElevenLabs のオーディオタグ（英語・角かっこなし）。例: ["excited"] ["sighs", "sad"]
+   * セリフの前に [excited] のように付けて読む。未指定なら演技指示・絵文字から自動で付ける。[] はタグなし
+   */
+  tags: z.array(z.string().max(40)).max(6).optional(),
   style: z.enum(['bubble', 'bubble-accent', 'caption', 'none']).default('bubble'),
   audio: AudioRef.optional(),
   /** セリフ後の間（秒） */
@@ -263,8 +268,20 @@ export const CastMember = z.object({
     caption: z.string().optional(),
     /** Irodori-TTS の乱数シード。同じ値なら同じ声になりやすい（キャラごとに固定） */
     seed: z.number().int().optional(),
-    /** Irodori-TTS サーバーに登録した参照音声の voice ID（声を固定したい時） */
+    /** Irodori-TTS サーバーに登録した参照音声の voice ID（声を固定したい時）。ElevenLabs ではこの音声をクローンした声を使う */
     refVoice: z.string().optional(),
+    /** ElevenLabs の声。voiceId が無ければ、参照音声（標準の声）のクローン、または声のイメージから作った声を使う */
+    eleven: z
+      .object({
+        voiceId: z.string().optional(),
+        /** 画面に出す声の名前 */
+        name: z.string().optional(),
+        /** 表現の幅。creative=感情豊か（タグが効きやすい）/ natural / robust=安定 */
+        stability: z.enum(['creative', 'natural', 'robust']).optional(),
+        /** 話す速さ（1 = その声の自然な速さ） */
+        speed: z.number().min(0.7).max(1.5).optional(),
+      })
+      .optional(),
   }),
 });
 export type CastMember = z.infer<typeof CastMember>;
@@ -292,8 +309,8 @@ export const AudioSettings = z.object({
   sfx: z.boolean().default(true),
   sfxVolume: z.number().min(0).max(1).default(0.6),
   narration: z.boolean().default(true),
-  /** 音声合成エンジン。auto = サーバーの設定（TTS_PROVIDER）に従う */
-  ttsProvider: z.enum(['auto', 'openai', 'irodori']).default('auto'),
+  /** 音声合成エンジン。auto = サーバーの設定（TTS_PROVIDER。既定は ElevenLabs）に従う */
+  ttsProvider: z.enum(['auto', 'elevenlabs', 'openai', 'irodori']).default('auto'),
   narrationVolume: z.number().min(0).max(2).default(1),
 });
 export type AudioSettings = z.infer<typeof AudioSettings>;

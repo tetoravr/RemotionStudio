@@ -11,7 +11,7 @@ import type { RunJob, Update } from '../pages/Editor';
 import { SCENE_META } from '../sceneMeta';
 import { Field, MenuItem, Popover, Seg, Text } from './Fields';
 import { regenerateLine } from './NarrationList';
-import { EmojiPicker, POSE_LABELS, PosePicker, SpeakerPicker } from './pickers';
+import { EmojiPicker, POSE_LABELS, PosePicker, SpeakerPicker, TagPicker } from './pickers';
 
 const STYLE_LABELS: Record<Line['style'], string> = { bubble: '吹き出し', 'bubble-accent': '強調', caption: '字幕', none: '声のみ' };
 const rid = () => Math.random().toString(36).slice(2, 8);
@@ -221,13 +221,29 @@ const LineCard: React.FC<{
               </div>
             </Field>
           ) : null}
-          <Field label="声の調子">
-            <div className="hstack">
-              <EmojiPicker value={l.emoji} onChange={(v) => setLine({ emoji: v })} />
-              <Text value={l.delivery} onChange={(v) => setLine({ delivery: v || undefined })} placeholder="演技の指示（例: 驚いて）" />
-            </div>
-          </Field>
-          <Field label="読み方" hint="英字のブランド名などを読み間違える時だけ、その語をカタカナに（句読点は残す）">
+          {tts.provider === 'elevenlabs' ? (
+            <Field label="声の調子" hint="タグがセリフの前に付き、その気持ち・話し方で読まれます。選ばない時は演技指示から自動で付きます">
+              <TagPicker line={l} onChange={(tags) => setLine({ tags })} />
+              <div style={{ marginTop: 6 }}>
+                <Text value={l.delivery} onChange={(v) => setLine({ delivery: v || undefined })} placeholder="演技指示（例: 驚いて・自信たっぷりに）" />
+              </div>
+            </Field>
+          ) : (
+            <Field label="声の調子">
+              <div className="hstack">
+                <EmojiPicker value={l.emoji} onChange={(v) => setLine({ emoji: v })} />
+                <Text value={l.delivery} onChange={(v) => setLine({ delivery: v || undefined })} placeholder="演技の指示（例: 驚いて）" />
+              </div>
+            </Field>
+          )}
+          <Field
+            label="読み方"
+            hint={
+              tts.provider === 'elevenlabs'
+                ? '英字のブランド名などを読み間違える時だけ、その語をカタカナに（句読点は残す）。[laughs] のように文の途中にタグも書けます'
+                : '英字のブランド名などを読み間違える時だけ、その語をカタカナに（句読点は残す）'
+            }
+          >
             <Text value={l.speak} onChange={(v) => setLine({ speak: v || undefined })} placeholder="例: だったら、スシトップ オーシーアール！" />
           </Field>
           {bubble ? (

@@ -8,6 +8,14 @@ export type Meta = {
     default: TtsProvider;
     engines: Record<TtsProvider, string>;
     irodori: { online: boolean; url: string; checkpoint?: string; device?: string; voices: string[]; labels?: Record<string, string>; error?: string };
+    elevenlabs: {
+      configured: boolean;
+      online: boolean;
+      model: string;
+      error?: string;
+      quota?: { used: number; limit: number; resetAt?: number; tier?: string };
+      canClone?: boolean;
+    };
   };
   voices: { id: string; label: string }[];
   icons: string[];
@@ -16,11 +24,25 @@ export type Meta = {
   library: { id: string; name: string; kind: 'human' | 'creature' }[];
 };
 
-/** プロジェクトの設定（auto 含む）から、実際に使う音声エンジンと ID を決める */
+export const ENGINE_NAMES: Record<TtsProvider, string> = { elevenlabs: 'ElevenLabs', irodori: 'Irodori-TTS', openai: 'OpenAI TTS' };
+
+/** 実際に使う音声エンジンと ID。エンジンはサーバーの設定で決まる（既定は ElevenLabs） */
 export const ttsFor = (meta: Meta, _setting?: Project['audio']['ttsProvider']) => {
-  const provider: TtsProvider = 'irodori'; // 声は Irodori-TTS 固定（OpenAI TTS は不採用）
-  return { provider, engine: meta.tts.engines[provider], ready: meta.tts.irodori.online };
+  const provider = meta.tts.default;
+  const ready = provider === 'elevenlabs' ? meta.tts.elevenlabs.online : provider === 'irodori' ? meta.tts.irodori.online : meta.openai;
+  /** つながらない時の理由（画面に出す） */
+  const problem =
+    provider === 'elevenlabs'
+      ? meta.tts.elevenlabs.configured
+        ? 'ElevenLabs に接続できません'
+        : 'ElevenLabs の API キーが未設定です'
+      : provider === 'irodori'
+        ? '音声エンジン（Irodori-TTS）に接続できません'
+        : 'OpenAI の API キーが未設定です';
+  return { provider, engine: meta.tts.engines[provider], ready, name: ENGINE_NAMES[provider], problem };
 };
+
+export type ElevenVoice = { id: string; name: string; description?: string; previewUrl?: string; publicOwnerId?: string; tags: string[] };
 
 export type ProjectSummary = {
   id: string;
@@ -104,7 +126,23 @@ export const api = {
     return fetch('/api/tts/voices/upload', { method: 'POST', body: fd }).then((r) => json<{ id: string; label: string }>(r));
   },
   deleteVoice: (id: string) => fetch(`/api/tts/voices/${id}`, { method: 'DELETE' }).then((r) => json<{ ok: boolean }>(r)),
-  ttsPreview: async (text: string, voice: Project['cast'][number]['voice'], opts: { delivery?: string; emoji?: string; provider?: TtsProvider } = {}) => {
+  elevenVoices: (scope: 'mine' | 'library', q = '', gender = '') =>
+    fetch(`/api/tts/eleven/voices?${new URLSearchParams({ scope, q, gender })}`).then((r) => json<{ voices: ElevenVoice[] }>(r)),
+  elevenAddLibrary: (body: { publicOwnerId: string; voiceId: string; name: string }) =>
+    fetch('/api/tts/eleven/library/add', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then((r) => json<{ voiceId: string; name: string }>(r)),
+  elevenDesign: (body: { description: string; text?: string }) =>
+    fetch('/api/tts/eleven/design', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then((r) =>
+      json<{ previews: { id: string; durationSec: number; url: string }[] }>(r),
+    ),
+  elevenAdoptDesign: (body: { generatedVoiceId: string; name: string; description: string }) =>
+    fetch('/api/tts/eleven/design/adopt', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then((r) => json<{ voiceId: string; name: string }>(r)),
+  elevenClone: (file: File, name: string) => {
+    const fd = new FormData();
+    fd.append('name', name);
+    fd.append('file', file);
+    return fetch('/api/tts/eleven/clone', { method: 'POST', body: fd }).then((r) => json<{ voiceId: string; name: string }>(r));
+  },
+  ttsPreview: async (text: string, voice: Project['cast'][number]['voice'], opts: { delivery?: string; emoji?: string; tags?: string[] } = {}) => {
     const r = await fetch('/api/tts/preview', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, voice, ...opts }) });
     if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || '試聴に失敗しました');
     return URL.createObjectURL(await r.blob());

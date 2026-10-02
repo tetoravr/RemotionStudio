@@ -13,6 +13,19 @@ export const AudioPanel: React.FC<{ project: Project; update: Update; runJob: Ru
   const meta = useContext(MetaContext)!;
   const tts = ttsFor(meta, a.ttsProvider);
   const ir = meta.tts.irodori;
+  const el = meta.tts.elevenlabs;
+  const engineSub =
+    tts.provider === 'elevenlabs'
+      ? el.online
+        ? `ElevenLabs（${el.model}）${el.quota ? ` ・ 今月 ${el.quota.used.toLocaleString()} / ${el.quota.limit.toLocaleString()} 文字` : ''}`
+        : el.configured
+          ? 'ElevenLabs ・ 接続できません'
+          : 'ElevenLabs ・ API キーが未設定'
+      : tts.provider === 'irodori'
+        ? ir.online
+          ? `Irodori-TTS${ir.device === 'cpu' ? ' ・ GPUなし（1セリフ30〜60秒）' : ''}`
+          : 'Irodori-TTS ・ npm run irodori で起動してください'
+        : 'OpenAI TTS';
   const bgmMode = a.bgm === 'none' ? 'none' : a.bgm ? 'custom' : 'default';
   const uploadBgm = async (f: File) => {
     const { path } = await api.upload(project.id, f);
@@ -20,24 +33,24 @@ export const AudioPanel: React.FC<{ project: Project; update: Update; runJob: Ru
   };
   return (
     <div>
-      <Section title="ナレーション">
+      <Section
+        title="ナレーション"
+        footer={
+          tts.provider === 'elevenlabs' && !el.online
+            ? el.configured
+              ? el.error ?? 'ElevenLabs に接続できません'
+              : '.env に ELEVENLABS_API_KEY=（ElevenLabs の API キー）を書いて、サーバーを再起動してください'
+            : undefined
+        }
+      >
         <div className="group">
           <Cell label="セリフを声で読み上げる">
             <Toggle checked={a.narration} onChange={(v) => update((p) => void (p.audio.narration = v))} />
           </Cell>
-          <Cell
-            label="音声エンジン"
-            sub={
-              tts.provider === 'irodori'
-                ? ir.online
-                  ? `Irodori-TTS${ir.device === 'cpu' ? ' ・ GPUなし（1セリフ30〜60秒）' : ''}`
-                  : 'Irodori-TTS ・ npm run irodori で起動してください'
-                : 'OpenAI TTS'
-            }
-          >
+          <Cell label="音声エンジン" sub={engineSub}>
             <span className={`badge ${tts.ready ? 'ok' : 'danger'}`}>
               <span className={`dot ${tts.ready ? 'ok' : 'danger'}`} />
-              {tts.ready ? '接続中' : '未接続'}
+              {tts.ready ? '接続中' : tts.provider === 'elevenlabs' && !el.configured ? 'キー未設定' : '未接続'}
             </span>
           </Cell>
           <Cell label="音量" stack>
@@ -50,7 +63,10 @@ export const AudioPanel: React.FC<{ project: Project; update: Update; runJob: Ru
       </Section>
 
       {a.narration ? (
-        <Section title="セリフの音声">
+        <Section
+          title="セリフの音声"
+          footer={tts.provider === 'elevenlabs' ? 'セリフごとの「声の調子」のタグ（ワクワク・驚き・ため息など）で、気持ちを乗せて読み上げます' : undefined}
+        >
           <NarrationList project={project} runJob={runJob} onSelectScene={onSelectScene} />
         </Section>
       ) : null}
