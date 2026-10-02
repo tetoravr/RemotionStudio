@@ -14,7 +14,7 @@ import { LIBRARY_CHARACTERS, libraryCastMember } from '../src/video/library';
 import { parseRich, fitFontSize } from '../src/video/components/RichText';
 import { adaptForFormat } from '../src/video/adapt';
 import { collectSfx } from '../src/video/events';
-import { applyTextTarget, migrateLayouts, normalizeAdjust, readAdjust, sceneElementIds, sceneLayout, setSceneLayout } from '../src/video/edit/textEdit';
+import { applyTextTarget, layerOrder, migrateLayouts, moveLayer, normalizeAdjust, readAdjust, sceneElementIds, sceneLayout, setLayerOrder, setSceneLayout } from '../src/video/edit/textEdit';
 import { autoTags, elevenVoiceKey, lineTags, normalizeTag, standardRefVoice, stripAudioTags, withAudioTags } from '../src/video/audioTags';
 import { elevenSpeechText, engineKey, irodoriCaption, isAudioStale, narrationHash, plainSpeechText, speechText, voiceFor } from '../src/video/narrationKey';
 import { Project } from '../src/video/schema';
@@ -670,4 +670,48 @@ test('ElevenLabs: 長い台本はシーンの区切りで分けて読む', () =>
     const scenes = new Set(c.map((e) => p.scenes.findIndex((s) => s.lines.includes(e.line))));
     for (const si of scenes) assert.ok(entries[si].every((e) => c.includes(e)), 'scene kept together');
   }
+});
+
+test('レイヤー: 既定の重なり順は描画の順と同じ（キャラは小さい順・小道具・吹き出し・字幕が手前）', () => {
+  const p = Project.parse(structuredClone(sample));
+  const talk = p.scenes.find((x) => x.type === 'talk' && x.characters.length >= 2 && x.prop)!;
+  assert.ok(talk, 'sample has a talk scene with a prop');
+  talk.layouts = undefined;
+  const order = layerOrder(talk, 'vertical');
+  const sizes = talk.characters.map((c) => c.size);
+  const chars = order.filter((id) => id.startsWith('char:'));
+  const rank = { s: 0, m: 1, l: 2, xl: 3 } as const;
+  for (let i = 1; i < chars.length; i++) assert.ok(rank[sizes[Number(chars[i - 1].slice(5))]] <= rank[sizes[Number(chars[i].slice(5))]], 'smaller characters behind');
+  assert.ok(order.indexOf('prop') > Math.max(...chars.map((c) => order.indexOf(c))), 'prop in front of characters');
+  const bubbles = order.filter((id) => id.startsWith('line:'));
+  assert.ok(bubbles.length && order.indexOf(bubbles[0]) > order.indexOf('prop'), 'bubbles in front of the prop');
+  // 声だけのセリフ（吹き出し無し）はレイヤーに出さない
+  for (const l of talk.lines) if (l.style === 'none') assert.ok(!order.includes(`line:${l.id}`));
+});
+
+test('レイヤー: 並べ替え・最前面・最背面は、その画面の形の重なり順だけを変える', () => {
+  const p = Project.parse(structuredClone(sample));
+  const sc = p.scenes.find((x) => x.type === 'feature')!;
+  sc.layouts = undefined;
+  const before = layerOrder(sc, 'vertical');
+  const reversed = [...before].reverse();
+  setLayerOrder(sc, 'vertical', reversed);
+  assert.deepEqual(layerOrder(sc, 'vertical'), reversed);
+  // 位置の調整は消さずに z だけ付く
+  assert.equal(readAdjust(sc, reversed[0], 'vertical').z, 0);
+  moveLayer(sc, 'vertical', 'visual', 'front');
+  assert.equal(layerOrder(sc, 'vertical').at(-1), 'visual');
+  moveLayer(sc, 'vertical', 'visual', 'back');
+  assert.equal(layerOrder(sc, 'vertical')[0], 'visual');
+  moveLayer(sc, 'vertical', 'visual', 1);
+  assert.equal(layerOrder(sc, 'vertical')[1], 'visual');
+  // 横型は変わらない
+  assert.deepEqual(layerOrder(sc, 'horizontal'), before);
+  // 調整（移動）と重なり順は両立する
+  const map = { ...sceneLayout(sc, 'vertical') };
+  map.headline = { ...readAdjust(sc, 'headline', 'vertical'), dx: 40 };
+  setSceneLayout(sc, 'vertical', map);
+  moveLayer(sc, 'vertical', 'headline', 'front');
+  assert.equal(readAdjust(sc, 'headline', 'vertical').dx, 40);
+  assert.equal(layerOrder(sc, 'vertical').at(-1), 'headline');
 });

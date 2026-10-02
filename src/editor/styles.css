@@ -629,11 +629,37 @@ code { font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: 0.92em
 .kv { display: grid; grid-template-columns: 64px minmax(0, 1fr); align-items: center; gap: 10px; margin: 0 0 8px; font-size: 12px; color: var(--text-2); }
 .kv:last-child { margin-bottom: 0; }
 .kv > span:first-child { font-weight: 500; }
-.el-row { display: flex; align-items: center; gap: 6px; padding: 5px 0; font-size: 12.5px; }
-.el-row + .el-row { border-top: 1px solid var(--separator); }
-.el-row .name { flex: 1; min-width: 0; cursor: pointer; }
-.el-row .name:hover { color: var(--accent); }
-.el-row.hidden .name { color: var(--text-3); text-decoration: line-through; cursor: default; }
+/* レイヤー（上ほど手前） */
+.layer-list { padding: 4px; }
+.layer-row {
+  display: flex; align-items: center; gap: 8px; height: 38px; padding: 0 4px 0 2px; border-radius: 8px; cursor: pointer; position: relative;
+  font-size: 12.5px; transition: background 0.12s;
+}
+.layer-row:hover { background: var(--fill-2); }
+.layer-row.on { background: var(--accent); color: #fff; }
+.layer-row.on .layer-icon { background: rgba(255, 255, 255, 0.22); color: #fff; }
+.layer-row.on .layer-grip, .layer-row.on .layer-eye { color: rgba(255, 255, 255, 0.85); }
+.layer-row.on .layer-eye:hover { background: rgba(255, 255, 255, 0.18); color: #fff; }
+.layer-row.on .layer-dot { background: #fff; }
+.layer-row.hidden { cursor: default; }
+.layer-row.hidden .layer-name, .layer-row.hidden .layer-icon, .layer-row.hidden .avatar { opacity: 0.4; }
+.layer-row.hidden .layer-name { text-decoration: line-through; }
+.layer-row.dragging { opacity: 0.4; }
+.layer-row.drop-before::before, .layer-row.drop-after::after { content: ''; position: absolute; left: 6px; right: 6px; height: 2px; border-radius: 1px; background: var(--accent); }
+.layer-row.drop-before::before { top: -1px; }
+.layer-row.drop-after::after { bottom: -1px; }
+.layer-grip { color: var(--text-3); cursor: grab; display: inline-flex; flex: none; opacity: 0; transition: opacity 0.12s; }
+.layer-row:hover .layer-grip, .layer-row.on .layer-grip { opacity: 1; }
+.layer-icon { width: 22px; height: 22px; border-radius: 6px; display: grid; place-items: center; background: var(--fill); color: var(--text-2); flex: none; }
+.layer-row .avatar { width: 22px; height: 22px; }
+.layer-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 500; }
+.layer-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); flex: none; }
+.layer-eye { flex: none; }
+.layer-xy { display: flex; gap: 8px; }
+.layer-xy label, .layer-unit { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--text-2); }
+.layer-xy .input { width: 76px; }
+.layer-unit .input { width: 84px; }
+.layer-order-btns { display: flex; gap: 2px; }
 
 /* 表情 */
 .pose-strip { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }

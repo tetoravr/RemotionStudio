@@ -166,3 +166,80 @@ export const applyTextTarget = (scene: Scene, target: TextTarget, value: string)
   }
   if (target.type === 'propLabel' && scene.type === 'talk' && scene.prop) scene.prop.label = value;
 };
+
+/* ---------------- レイヤー（重なり順） ---------------- */
+
+const SIZE_ORDER = { s: 0, m: 1, l: 2, xl: 3 } as const;
+
+/** キャラは小さい順に奥から描く（SceneCharacters と同じ並び）。char:<元の番号> の並び */
+const characterOrder = (scene: Scene) =>
+  scene.characters
+    .map((p, i) => ({ p, i }))
+    .sort((a, b) => SIZE_ORDER[a.p.size] - SIZE_ORDER[b.p.size])
+    .map(({ i }) => `char:${i}`);
+
+/**
+ * シーンの部品を描く順（奥→手前）。scenes/*.tsx の並びと合わせる。
+ * subtitles=true（全セリフを字幕でも出す）の時は、すべてのセリフの字幕も含める
+ */
+export const sceneDrawOrder = (scene: Scene, opts: { subtitles?: boolean } = {}): string[] => {
+  const chars = characterOrder(scene);
+  const bubbles = scene.lines.filter((l) => l.style === 'bubble' || l.style === 'bubble-accent').map((l) => `line:${l.id}`);
+  const captions = scene.lines.filter((l) => l.style === 'caption' || (opts.subtitles && l.text.trim())).map((l) => `caption:${l.id}`);
+  const tail = [...bubbles, ...captions];
+  switch (scene.type) {
+    case 'logo':
+      return ['ticker', 'fx', 'logo', 'subtitle', ...chars, 'confetti', ...tail];
+    case 'talk':
+      return ['miniLogo', 'headline', ...chars, 'decor', 'prop', ...tail];
+    case 'feature':
+      return ['fx', 'eyebrow', 'headline', 'footnote', 'visual', ...chars, ...tail];
+    case 'showcase':
+      return ['title', 'note', 'screen', ...chars, ...tail];
+    case 'cta':
+      return ['fx', 'logo', 'button', 'contact', ...scene.notes.map((_, i) => `note:${i}`), ...chars, ...tail];
+  }
+};
+
+/** 調整していない時の z（Editable に渡している値と同じ。キャラ=大きさ順、小道具=10、吹き出し=20、字幕=30、ほか=0） */
+const defaultZ = (id: string, scene: Scene) => {
+  if (id.startsWith('char:')) return characterOrder(scene).indexOf(id);
+  if (id === 'prop') return 10;
+  if (id.startsWith('line:')) return 20;
+  if (id.startsWith('caption:')) return 30;
+  return 0;
+};
+
+/**
+ * 今の重なり順（奥→手前）。レイヤーで並べ替えた要素（z あり）は、並べ替えていない要素より手前に、z の順で並ぶ。
+ * Editable の zIndex（z あり: 1000+z、なし: 既定の z）と同じ規則
+ */
+export const layerOrder = (scene: Scene, format: FormatId, opts: { subtitles?: boolean } = {}): string[] => {
+  const ids = sceneDrawOrder(scene, opts).filter((id) => elementExists(scene, id));
+  const layout = sceneLayout(scene, format);
+  const dom = new Map(ids.map((id, i) => [id, i]));
+  const eff = (id: string) => (layout[id]?.z != null ? 1000 + layout[id].z! : defaultZ(id, scene));
+  return [...ids].sort((a, b) => eff(a) - eff(b) || dom.get(a)! - dom.get(b)!);
+};
+
+/** 重なり順を決める（奥→手前の並び）。並びのすべての要素に z を付ける（その画面の形だけ） */
+export const setLayerOrder = (scene: Scene, format: FormatId, backToFront: string[]) => {
+  const map = { ...sceneLayout(scene, format) };
+  backToFront.forEach((id, z) => {
+    const next = normalizeAdjust({ ...readAdjust(scene, id, format), z });
+    if (next) map[id] = next;
+    else delete map[id];
+  });
+  setSceneLayout(scene, format, map);
+};
+
+/** 1つの要素を前後に動かす。to: 'front'=最前面 / 'back'=最背面 / 数値=手前へいくつ（負なら奥へ） */
+export const moveLayer = (scene: Scene, format: FormatId, id: string, to: 'front' | 'back' | number, opts: { subtitles?: boolean } = {}) => {
+  const order = layerOrder(scene, format, opts);
+  const from = order.indexOf(id);
+  if (from < 0) return;
+  order.splice(from, 1);
+  const dest = to === 'front' ? order.length : to === 'back' ? 0 : Math.max(0, Math.min(order.length, from + to));
+  order.splice(dest, 0, id);
+  setLayerOrder(scene, format, order);
+};

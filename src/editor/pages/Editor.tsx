@@ -15,6 +15,7 @@ import { go, MetaContext } from '../App';
 import { AudioPanel } from '../components/AudioPanel';
 import { BrandPanel } from '../components/BrandPanel';
 import { CastPanel } from '../components/CastPanel';
+import { LayerPanel } from '../components/LayerPanel';
 import { LinesPanel } from '../components/LinesPanel';
 import { confirmDialog } from '../components/Dialogs';
 import { Progress, Seg, Sheet } from '../components/Fields';
@@ -27,7 +28,7 @@ import { Ic } from '../icons';
 
 export type Update = (fn: (draft: Project) => void, opts?: { silent?: boolean }) => void;
 export type RunJob = (label: string, url: string, body?: unknown) => Promise<Job | null>;
-type Tab = 'scene' | 'design' | 'cast' | 'sound';
+type Tab = 'scene' | 'layers' | 'design' | 'cast' | 'sound';
 
 /** コンテナにアスペクト比を保って収める */
 const useFit = (ratio: number, padX = 40, padY = 54) => {
@@ -465,6 +466,21 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
     setSelectedEl(elId);
   }, []);
 
+  /** レイヤーから選ぶ。再生位置がそのシーンの外なら、シーンの中へ移してから選ぶ（選べるのは再生位置のシーンの要素だけ） */
+  const selectLayer = useCallback(
+    (elId: string) => {
+      const p = projectRef.current;
+      const st = timeline?.scenes[Math.min(selectedIdx.current, (timeline?.scenes.length ?? 1) - 1)];
+      const player = playerRef.current;
+      if (p && st && player) {
+        const f = player.getCurrentFrame();
+        if (f < st.start || f >= st.start + st.duration) player.seekTo(st.start + Math.min(st.duration - 1, Math.round(st.duration * 0.62)));
+      }
+      selectElement(elId);
+    },
+    [timeline, selectElement],
+  );
+
   if (loadErr)
     return (
       <div className="home-main">
@@ -482,7 +498,8 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
 
   const selectScene = (i: number) => {
     setSelected(i);
-    setTab('scene');
+    // シーンごとの内容のタブ（シーン・レイヤー）はそのまま。ほかのタブからはシーンへ
+    setTab((t) => (t === 'layers' ? t : 'scene'));
     setSelectedEl(null);
     const st = timeline.scenes[i];
     if (st) playerRef.current?.seekTo(st.start + Math.min(st.duration - 1, Math.round(st.duration * 0.62)));
@@ -678,6 +695,7 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
               onChange={setTab}
               options={[
                 { value: 'scene', label: 'シーン' },
+                { value: 'layers', label: 'レイヤー' },
                 { value: 'design', label: 'デザイン' },
                 { value: 'cast', label: 'キャスト' },
                 { value: 'sound', label: 'サウンド' },
@@ -686,7 +704,10 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
           </div>
           <div className="inspector-body">
             {tab === 'scene' ? (
-              <SceneInspector project={project} index={sel} update={update} timing={timeline.scenes[sel]} runJob={runJob} onSelectElement={selectElement} />
+              <SceneInspector project={project} index={sel} update={update} timing={timeline.scenes[sel]} runJob={runJob} />
+            ) : null}
+            {tab === 'layers' ? (
+              <LayerPanel project={project} index={sel} update={update} selectedId={selectedEl} onSelect={selectLayer} onDeselect={() => setSelectedEl(null)} />
             ) : null}
             {tab === 'design' ? <BrandPanel project={project} update={update} /> : null}
             {tab === 'cast' ? <CastPanel project={project} update={update} runJob={runJob} flush={flush} /> : null}
