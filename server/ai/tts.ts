@@ -8,7 +8,8 @@ import type { AudioSettings, CastMember, Line } from '../../src/video/schema';
 import { config } from '../env';
 import { runFfmpeg, wavDurationSec } from '../ffmpeg';
 import { getOpenAI } from './client';
-import { synthEleven } from './elevenlabs';
+import { synthEleven, transcribe } from './elevenlabs';
+import { keytermsOf, verdictFor, type SpeechVerdict } from './speechCheck';
 import { applyEq, bandProfile, correctionCurve, EQ_ENABLED, eqKey, loadEq, saveEq } from './voiceEq';
 import { ensureVoice, localVoiceFile, localVoices } from './voices';
 
@@ -96,12 +97,13 @@ const TTS_RATE = 24000; // OpenAI の pcm 出力は 24kHz / 16bit / mono
  * 前後の無音だけを軽く切り、音量を揃える。
  * 息継ぎや語尾の余韻は自然さに効くので、削りすぎない（先頭 80ms / 末尾 140ms の余白を残す）。
  */
-export const trimAndNormalize = (input: Int16Array | Float32Array, rate = TTS_RATE) => {
+export const trimAndNormalize = (input: Int16Array | Float32Array, rate = TTS_RATE, opts: { gentle?: boolean } = {}) => {
   const f = input instanceof Int16Array ? Float32Array.from(input, (v) => v / 32768) : Float32Array.from(input);
   const win = Math.round(rate * 0.01);
   let absPeak = 0;
   for (const v of f) absPeak = Math.max(absPeak, Math.abs(v));
-  const thr = Math.max(0.004, absPeak * 0.02);
+  // gentle（ElevenLabs）: 小さな声やささやき・語尾を切らないよう、ごく小さな音まで声として残す
+  const thr = opts.gentle ? Math.max(0.0015, absPeak * 0.008) : Math.max(0.004, absPeak * 0.02);
   const loud = (i: number) => {
     let m = 0;
     for (let k = i; k < Math.min(f.length, i + win); k++) m = Math.max(m, Math.abs(f[k]));
@@ -111,10 +113,12 @@ export const trimAndNormalize = (input: Int16Array | Float32Array, rate = TTS_RA
   while (start < f.length && !loud(start)) start += win;
   let end = f.length;
   while (end > start && !loud(Math.max(0, end - win))) end -= win;
-  ({ start, end } = speechRange(f, rate, start, end));
-  start = Math.max(0, start - Math.round(rate * 0.08));
-  end = Math.min(f.length, end + Math.round(rate * 0.14));
-  const out = compressSilences(f.slice(start, Math.max(start + 1, end)), rate);
+  // 取り残された音の除去と、長い無音の短縮は Irodori 向け（ElevenLabs では語尾や小声まで消してしまうことがあるので行わない）
+  if (!opts.gentle) ({ start, end } = speechRange(f, rate, start, end));
+  start = Math.max(0, start - Math.round(rate * (opts.gentle ? 0.1 : 0.08)));
+  end = Math.min(f.length, end + Math.round(rate * (opts.gentle ? 0.2 : 0.14)));
+  const body = f.slice(start, Math.max(start + 1, end));
+  const out = opts.gentle ? body : compressSilences(body, rate);
   // 音声部分の RMS を -16dBFS に揃える（ピークは -1dBFS で制限）
   let sum = 0;
   let n = 0;
@@ -336,7 +340,15 @@ export type SynthOptions = {
   seed?: number;
   /** ElevenLabs の表現の幅（プロジェクト共通） */
   stability?: AudioSettings['elevenStability'];
+  /**
+   * 台本（表示の文・読み方）。渡すと ElevenLabs の音声を文字起こしして照合し、
+   * 読み違い・途中で切れている時は作り直す（最大2回）
+   */
+  expected?: string[];
 };
+
+/** 読み上げの確認の結果（AudioRef.check） */
+export type SpeechCheckResult = { ok: boolean; heard: string; reason?: string };
 
 /** 読み上げる文字数（記号・空白・オーディオタグを除く） */
 export const spokenChars = (text: string) => stripAudioTags(text).replace(/[\s、。，．,.！？!?…・「」『』（）()ー〜~"'“”]/g, '').length;
@@ -491,7 +503,12 @@ export const voiceEqFor = async (refVoice: string | undefined): Promise<number[]
   return calibrating.get(refVoice)!;
 };
 
-export const synthesizeToFile = async (text: string, voice: VoiceWithLibrary, out: string, opts: SynthOptions = {}) => {
+export const synthesizeToFile = async (
+  text: string,
+  voice: VoiceWithLibrary,
+  out: string,
+  opts: SynthOptions = {},
+): Promise<{ durationSec: number; mouth: number[]; check?: SpeechCheckResult }> => {
   const outFile = path.resolve(out);
   const provider = opts.provider ?? resolveProvider();
   const synth = (o: SynthOptions) =>
@@ -500,6 +517,7 @@ export const synthesizeToFile = async (text: string, voice: VoiceWithLibrary, ou
       : provider === 'irodori'
         ? synthIrodori(text, voice, o)
         : synthOpenAI(text, voice, o.delivery);
+  if (provider === 'elevenlabs') return elevenToFile(opts, synth, outFile);
   const { samples: raw, rate } = await synth(opts);
   if (!raw.length) throw new Error('音声が空でした');
   let cleaned = trimAndNormalize(raw, rate);
@@ -514,20 +532,47 @@ export const synthesizeToFile = async (text: string, voice: VoiceWithLibrary, ou
       if (retry.rate === rate && off(c) < off(cleaned)) cleaned = c;
     }
   }
-  // ElevenLabs もまれに、読み終えたあとに余計な声を足して長くなることがある。極端に長い時だけ1回作り直す（クレジットを使うので控えめに）
-  if (provider === 'elevenlabs') {
-    const expected = expectedSpeechSec(text, 1.1);
-    const len = (s: Float32Array) => s.length / rate;
-    if (len(cleaned) > expected * 2.2 + 1) {
-      const retry = await synth({ ...opts, seed: crypto.randomInt(1, 2_000_000_000) });
-      const c = trimAndNormalize(retry.samples, retry.rate);
-      if (retry.rate === rate && Math.abs(Math.log(len(c) / expected)) < Math.abs(Math.log(len(cleaned) / expected))) cleaned = c;
-    }
-  }
   // 話速はどのエンジンも生成時に反映済み（ElevenLabs は speed と伸縮、Irodori は duration_scale、OpenAI は speed）
   // 参照音声の声は、コーデックで弱まった高い音域を参照音声に合わせて戻す
   const gains = provider === 'irodori' ? await voiceEqFor(standardRefVoice(voice)) : null;
   return saveSpeech(gains ? applyEq(cleaned, rate, gains) : cleaned, rate, outFile);
+};
+
+/**
+ * ElevenLabs: 作った音声を文字起こしして台本と照合し、読み違い・途中で切れている時は作り直す（最大2回）。
+ * 一番台本に近いものを使い、それでも合わない時は check.ok=false を返す（エディターに「読み違いかも」と出す）
+ */
+const elevenToFile = async (
+  opts: SynthOptions,
+  synth: (o: SynthOptions) => Promise<{ samples: Float32Array | Int16Array; rate: number }>,
+  outFile: string,
+) => {
+  const expected = (opts.expected ?? []).map((t) => t.trim()).filter(Boolean);
+  const verify = config.eleven.verify && expected.length > 0;
+  let best: { samples: Float32Array; rate: number; check?: SpeechCheckResult; score: number } | null = null;
+  for (let attempt = 0; attempt < (verify ? 3 : 1); attempt++) {
+    const r = await synth(attempt === 0 ? opts : { ...opts, seed: crypto.randomInt(1, 2_000_000_000) });
+    if (!r.samples.length) throw new Error('音声が空でした');
+    const cleaned = trimAndNormalize(r.samples, r.rate, { gentle: true });
+    if (!verify) {
+      best = { samples: cleaned, rate: r.rate, score: 1 };
+      break;
+    }
+    let v: SpeechVerdict;
+    try {
+      v = await verdictFor(expected, await transcribe(encodeWav(cleaned, r.rate), keytermsOf(expected.join(' '))));
+    } catch (e) {
+      // 文字起こしが使えない時（権限・プランなど）は、確認せずに使う
+      console.warn(`[speech-check] 文字起こしできませんでした: ${(e as Error).message}`);
+      best = { samples: cleaned, rate: r.rate, score: 1 };
+      break;
+    }
+    const cand = { samples: cleaned, rate: r.rate, score: v.ok ? 1 + v.score : v.score, check: { ok: v.ok, heard: v.heard, ...(v.reason ? { reason: v.reason } : {}) } };
+    if (!best || cand.score > best.score) best = cand;
+    if (v.ok) break;
+  }
+  const saved = await saveSpeech(best!.samples, best!.rate, outFile);
+  return { ...saved, check: best!.check };
 };
 
 /** 整えた音声を WAV で保存し、長さと口パクのデータを返す */

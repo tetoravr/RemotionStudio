@@ -9,16 +9,20 @@ import type { RunJob, Update } from '../pages/Editor';
 import { Cell, Disclosure, FilePick, Num, Section, Seg, Slider, Toggle } from './Fields';
 import { NarrationList } from './NarrationList';
 
+const MODEL_NAMES: Record<string, string> = { eleven_v4: 'Eleven v4', eleven_v3: 'Eleven v3' };
+
 export const AudioPanel: React.FC<{ project: Project; update: Update; runJob: RunJob; onSelectScene?: (i: number) => void }> = ({ project, update, runJob, onSelectScene }) => {
   const a = project.audio;
   const meta = useContext(MetaContext)!;
   const tts = ttsFor(meta, a);
   const ir = meta.tts.irodori;
   const el = meta.tts.elevenlabs;
+  /** 読み方（speak）を指定しているセリフの数 */
+  const speakCount = project.scenes.reduce((n, sc) => n + sc.lines.filter((l) => l.speak?.trim()).length, 0);
   const engineSub =
     tts.provider === 'elevenlabs'
       ? el.online
-        ? `ElevenLabs（${el.model}）${el.quota ? ` ・ 今月 ${el.quota.used.toLocaleString()} / ${el.quota.limit.toLocaleString()} 文字` : ''}`
+        ? `ElevenLabs（${MODEL_NAMES[el.model] ?? el.model}${el.requestedModel && el.requestedModel !== el.model ? `。${MODEL_NAMES[el.requestedModel] ?? el.requestedModel} が使えないため` : ''}）${el.quota ? ` ・ 今月 ${el.quota.used.toLocaleString()} / ${el.quota.limit.toLocaleString()} 文字` : ''}`
         : el.configured
           ? 'ElevenLabs ・ 接続できません'
           : 'ElevenLabs ・ API キーが未設定'
@@ -54,6 +58,16 @@ export const AudioPanel: React.FC<{ project: Project; update: Update; runJob: Ru
               {tts.ready ? '接続中' : tts.provider === 'elevenlabs' && !el.configured ? 'キー未設定' : '未接続'}
             </span>
           </Cell>
+          <Cell label="セリフを変えたら自動で音声を作り直す" sub="入力が落ち着いてから、変えたセリフだけを作り直します。オフにすると、セリフごとの「音声を作り直す」で作ります">
+            <Toggle checked={a.autoVoice} disabled={!a.narration} onChange={(v) => update((p) => void (p.audio.autoVoice = v))} />
+          </Cell>
+          {tts.provider === 'elevenlabs' && speakCount ? (
+            <Cell label={`読み方の指定が ${speakCount} 件あります`} sub="以前の音声エンジン向けの読み方が残っていると、セリフと違う言葉で読まれます。ElevenLabs は英字のブランド名もそのまま読めます">
+              <button className="btn sm" onClick={() => update((p) => p.scenes.forEach((sc) => sc.lines.forEach((l) => void (l.speak = undefined))))}>
+                すべて外す
+              </button>
+            </Cell>
+          ) : null}
           {tts.provider === 'elevenlabs' ? (
             <Cell label="表現の幅" sub="豊かなほどタグの気持ちが強く出ます（まれに読み方が崩れます）">
               <Seg
@@ -81,7 +95,7 @@ export const AudioPanel: React.FC<{ project: Project; update: Update; runJob: Ru
               : undefined
           }
         >
-          <NarrationList project={project} runJob={runJob} onSelectScene={onSelectScene} />
+          <NarrationList project={project} onSelectScene={onSelectScene} />
         </Section>
       ) : null}
 

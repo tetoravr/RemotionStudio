@@ -109,6 +109,7 @@ code { font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: 0.92em
 .ellipsis { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .warn-text { color: var(--orange); }
 .danger-text { color: var(--red); }
+.accent-text { color: var(--accent); }
 .ok-text { color: var(--green); }
 
 /* ---------- レイアウト小物 ---------- */
@@ -295,6 +296,7 @@ code { font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: 0.92em
 .dot.ok { background: var(--green); }
 .dot.warn { background: var(--orange); }
 .dot.danger { background: var(--red); }
+.dot.accent { background: var(--accent); }
 
 /* ---------- お知らせ ---------- */
 .notice { display: flex; gap: 10px; align-items: flex-start; font-size: 12.5px; line-height: 1.55; color: var(--text-2); background: var(--fill-2); border-radius: var(--r); padding: 10px 12px; }
@@ -577,6 +579,17 @@ code { font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: 0.92em
 }
 .line-time:hover { background: var(--accent-soft); color: var(--accent); }
 .line-card.speaking .line-time { background: var(--accent); color: #fff; }
+.voice-chip {
+  flex: 0 1 auto; min-width: 0; display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 8px; border-radius: 10px; border: 0;
+  font: inherit; font-size: 11px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.voice-chip.busy { background: var(--accent-soft); color: var(--accent); }
+.voice-chip.wait { background: var(--fill); color: var(--text-2); font-weight: 500; }
+.voice-chip.action { background: var(--accent); color: #fff; cursor: pointer; }
+.voice-chip.action:hover { background: var(--accent-hover); }
+.voice-chip.warn { background: rgba(255, 149, 0, 0.16); color: var(--orange); cursor: pointer; }
+.voice-chip.error { background: rgba(255, 59, 48, 0.12); color: var(--red); cursor: pointer; }
+.voice-chip:disabled { opacity: 0.5; cursor: default; }
 .line-toggle {
   flex: none; border: 0; background: none; color: var(--text-3); font: inherit; font-size: 11px; display: inline-flex; align-items: center; gap: 2px;
   height: 22px; padding: 0 4px 0 6px; border-radius: 6px; cursor: pointer;

@@ -45,6 +45,8 @@ export const AudioRef = z.object({
   hash: z.string(),
   /** 口パク用の口の開き（30Hz、0=閉じ / 1=開き）。音声の音量から算出 */
   mouth: z.array(z.number().int().min(0).max(2)).optional(),
+  /** 読み上げの確認（文字起こしと台本の照合）。ok=false は作り直しても台本と合わなかった */
+  check: z.object({ ok: z.boolean(), heard: z.string(), reason: z.string().optional() }).optional(),
 });
 export type AudioRef = z.infer<typeof AudioRef>;
 
@@ -314,6 +316,8 @@ export const AudioSettings = z.object({
    * creative=感情豊か（タグが効きやすいが崩れやすい）/ natural / robust=安定
    */
   elevenStability: z.enum(['creative', 'natural', 'robust']).default('natural'),
+  /** セリフを変えたら、そのセリフの音声を自動で作り直す（エディターで、入力が落ち着いてから） */
+  autoVoice: z.boolean().default(true),
   narrationVolume: z.number().min(0).max(2).default(1),
 });
 export type AudioSettings = z.infer<typeof AudioSettings>;

@@ -321,9 +321,9 @@ app.post(
   '/api/projects/:id/narration',
   h(async (req, res) => {
     const id = param(req, 'id');
-    // lineIds を指定すると、そのセリフだけを（変更の有無にかかわらず）作り直す
+    // lineIds を指定すると、そのセリフだけを作り直す（force:false なら、音声が古いものだけ。エディターの自動の作り直し）
     const only = Array.isArray(req.body?.lineIds) ? (req.body.lineIds as unknown[]).map(String) : undefined;
-    const force = Boolean(req.body?.force) || Boolean(only);
+    const force = req.body?.force !== undefined ? Boolean(req.body.force) : Boolean(only);
     const busy = conflictFor(id, 'narration');
     if (busy) {
       res.status(409).json({ error: busy });

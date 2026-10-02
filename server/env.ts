@@ -36,8 +36,12 @@ export const config = {
     apiKey: process.env.ELEVENLABS_API_KEY || process.env.XI_API_KEY || '',
     /** API の接続先（EU などのデータ所在地を使う時だけ変える） */
     baseUrl: (process.env.ELEVENLABS_BASE_URL || 'https://api.elevenlabs.io').replace(/\/+$/, ''),
-    /** 読み上げのモデル。オーディオタグが使える eleven_v3 が既定 */
-    model: process.env.ELEVENLABS_MODEL || 'eleven_v3',
+    /** 読み上げのモデル。既定は eleven_v4（Text to Dialogue API で1セリフずつ）。使えない時は自動で eleven_v3 */
+    model: process.env.ELEVENLABS_MODEL || 'eleven_v4',
+    /** 読み上げの確認に使う文字起こしのモデル */
+    sttModel: process.env.ELEVENLABS_STT_MODEL || 'scribe_v2',
+    /** 作った音声を文字起こしして台本と照合し、読み違い・途切れがあれば作り直す（0 で無効） */
+    verify: process.env.ELEVENLABS_VERIFY !== '0',
     /** 声のデザイン（声のイメージから声を作る）のモデル */
     designModel: process.env.ELEVENLABS_DESIGN_MODEL || 'eleven_ttv_v3',
     /** 読み上げの言語（ISO 639-1）。空にすると自動判定 */

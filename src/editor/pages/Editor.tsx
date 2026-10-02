@@ -16,6 +16,7 @@ import { AudioPanel } from '../components/AudioPanel';
 import { BrandPanel } from '../components/BrandPanel';
 import { CastPanel } from '../components/CastPanel';
 import { LayerPanel } from '../components/LayerPanel';
+import { useVoiceUpdater, VoiceContext } from '../voice';
 import { LinesPanel } from '../components/LinesPanel';
 import { confirmDialog } from '../components/Dialogs';
 import { Progress, Seg, Sheet } from '../components/Fields';
@@ -297,6 +298,8 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
   }, [project?.id, size.w > 0]);
 
   const tts = ttsFor(meta, project?.audio);
+  // セリフの音声を裏で作り直す（自動・手動とも）
+  const voice = useVoiceUpdater({ project, engine: tts.engine, ready: tts.ready, flush, update, projectRef });
   const staleByScene = useMemo(
     () => (project ? project.scenes.map((s) => s.lines.filter((l) => isAudioStale(l, project.cast, tts.engine)).length) : []),
     [project, tts.engine],
@@ -544,6 +547,7 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
     saveState === 'saved' ? '保存済み' : saveState === 'saving' ? '保存中…' : saveState === 'dirty' ? '編集中' : '保存できませんでした';
 
   return (
+    <VoiceContext.Provider value={voice}>
     <div className="editor">
       <header className="toolbar">
         <div className="tb-left">
@@ -617,8 +621,8 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
         />
 
         <main className="stage">
-          {project.audio.narration && (staleCount > 0 || !tts.ready) ? (
-            <div className="stage-banner">
+          {project.audio.narration && (staleCount > 0 || !tts.ready || voice.running.size > 0) ? (
+            <div className={`stage-banner ${voice.running.size || (voice.waiting.size && !Object.keys(voice.errors).length) ? 'solo' : ''}`}>
               {!tts.ready ? (
                 <>
                   <span className="dot danger" />
@@ -627,12 +631,31 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
                     詳しく
                   </button>
                 </>
+              ) : voice.running.size ? (
+                <>
+                  <span className="spinner" style={{ width: 13, height: 13 }} />
+                  <span>
+                    {voice.running.size === 1 ? 'セリフの音声を作り直しています' : '音声を作っています'}
+                    {voice.progress && voice.progress.total > 1 ? `（${voice.progress.done}/${voice.progress.total}）` : ''}
+                  </span>
+                </>
+              ) : voice.waiting.size && voice.waiting.size === staleCount ? (
+                <>
+                  <span className="dot accent" />
+                  <span>セリフの変更に合わせて、音声を作り直します</span>
+                </>
               ) : (
                 <>
                   <span className="dot warn" />
-                  <span>{outdatedCount ? `作り直しが必要な音声が ${staleCount} 件あります` : `音声がまだないセリフが ${staleCount} 件あります`}</span>
-                  <button className="btn sm primary" onClick={() => runJob('ナレーションを作っています', `/api/projects/${project.id}/narration`)}>
-                    音声を作成
+                  <span>
+                    {Object.keys(voice.errors).length
+                      ? `音声を作れなかったセリフがあります`
+                      : outdatedCount
+                        ? `内容が変わったセリフが ${staleCount} 件あります`
+                        : `音声がまだないセリフが ${staleCount} 件あります`}
+                  </span>
+                  <button className="btn sm primary" onClick={() => void voice.request('stale')}>
+                    音声を作り直す
                   </button>
                 </>
               )}
@@ -765,5 +788,6 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
         />
       ) : null}
     </div>
+    </VoiceContext.Provider>
   );
 };

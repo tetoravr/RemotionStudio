@@ -9,7 +9,8 @@ import { aiToScenes, type AiStoryboard } from '../server/ai/storyboard';
 import { detectMouthRegion } from '../server/ai/mouth';
 import { encodeWav, engineId, mouthEnvelope, readWavSamples, resolveProvider, synthesizeToFile, trimAndNormalize } from '../server/ai/tts';
 import { config } from '../server/env';
-import { dialogueChunks, generateNarration } from '../server/narration';
+import { generateNarration } from '../server/narration';
+import { keytermsOf, normalizeSpeech, speechScore, SURE_OK } from '../server/ai/speechCheck';
 import { LIBRARY_CHARACTERS, libraryCastMember } from '../src/video/library';
 import { parseRich, fitFontSize } from '../src/video/components/RichText';
 import { adaptForFormat } from '../src/video/adapt';
@@ -42,11 +43,11 @@ test('以前の版で作ったサンプルの音声は、キャラの標準の�
   assert.equal(irodoriCaption(voice), '');
 });
 
-test('音声エンジン: 既定は ElevenLabs（Eleven v3）', () => {
+test('音声エンジン: 既定は ElevenLabs（Eleven v4）', () => {
   assert.equal(resolveProvider('auto'), 'elevenlabs');
   // 以前の版でプロジェクトに残っている設定は使わない
   assert.equal(resolveProvider('irodori'), 'elevenlabs');
-  assert.match(engineId('elevenlabs'), /^elevenlabs:eleven_v3/);
+  assert.match(engineId('elevenlabs'), /^elevenlabs:eleven_v4/);
 });
 
 test('オーディオタグ: 演技指示・絵文字から自動で付き、選んだタグが優先される', () => {
@@ -572,17 +573,16 @@ test('ElevenLabs: タグ付きの文と声の設定を送り、標準の声は�
   }
 });
 
-test('ElevenLabs: 台本全体を1回で読み、セリフごとに切り分ける。使えない時は1セリフずつ（模擬サーバー）', async () => {
+test('ElevenLabs: v4 は1セリフずつ Text to Dialogue で読み、文字起こしで台本と照合して、違えば作り直す（模擬サーバー）', async () => {
   const rate = 44100;
   const reqs: { url: string; body: string }[] = [];
-  let dialogueOk = true;
-  // セリフごとに 0.5 秒の音と 0.3 秒の無音を並べた「1回の読み上げ」を返す
-  const take = (n: number) => {
-    const seg = Math.round(rate * 0.5);
-    const gap = Math.round(rate * 0.3);
-    const s = new Float32Array((seg + gap) * n + gap);
-    for (let k = 0; k < n; k++) for (let i = 0; i < seg; i++) s[gap + k * (seg + gap) + i] = Math.sin(i / (6 + k)) * 0.3;
-    return { wav: encodeWav(s, rate), segments: Array.from({ length: n }, (_, k) => ({ voice_id: 'v', start_time_seconds: (gap + k * (seg + gap)) / rate, end_time_seconds: (gap + k * (seg + gap) + seg) / rate, character_start_index: 0, character_end_index: 1, dialogue_input_index: k })) };
+  let v4Ok = true;
+  // 文字起こしの返事: 1回目は途中で切れた文、2回目からは台本どおり
+  const heard: Record<string, string[]> = {};
+  const tone = (sec: number) => {
+    const s = new Float32Array(Math.round(rate * (sec + 0.4)));
+    for (let i = Math.round(rate * 0.2); i < Math.round(rate * (sec + 0.2)); i++) s[i] = Math.sin(i / 7) * 0.3;
+    return encodeWav(s, rate);
   };
   const server = http.createServer((req, res) => {
     const chunks: Buffer[] = [];
@@ -592,12 +592,18 @@ test('ElevenLabs: 台本全体を1回で読み、セリフごとに切り分け�
       reqs.push({ url: req.url ?? '', body });
       res.setHeader('content-type', 'application/json');
       if (req.url === '/v1/voices/add') return void res.end(JSON.stringify({ voice_id: /速水/.test(body) ? 'v-saki' : 'v-osushi' }));
-      if (req.url?.startsWith('/v1/text-to-dialogue/with-timestamps')) {
-        if (!dialogueOk) return void ((res.statusCode = 404), res.end(JSON.stringify({ detail: { code: 'not_found', message: 'no' } })));
-        const t = take(JSON.parse(body).inputs.length);
-        return void res.end(JSON.stringify({ audio_base64: t.wav.toString('base64'), voice_segments: t.segments }));
+      if (req.url?.startsWith('/v1/text-to-dialogue')) {
+        if (!v4Ok) return void ((res.statusCode = 400), res.end(JSON.stringify({ detail: { code: 'invalid_model', message: 'model eleven_v4 is not available' } })));
+        res.setHeader('content-type', 'audio/mpeg');
+        return void res.end(tone(1));
       }
-      if (req.url?.startsWith('/v1/text-to-speech/')) return void ((res.setHeader('content-type', 'audio/mpeg'), res.end(take(1).wav)));
+      if (req.url?.startsWith('/v1/text-to-speech/')) return void ((res.setHeader('content-type', 'audio/mpeg'), res.end(tone(1))));
+      if (req.url === '/v1/speech-to-text') {
+        // 送った台本の文（keyterms ではなく、合図用に model_id の後ろの順番で返す）
+        const key = 'line';
+        const list = (heard[key] ??= ['だったら', 'だったら、SUSHI TOP OCR！']);
+        return void res.end(JSON.stringify({ text: list.length > 1 ? list.shift() : list[0] }));
+      }
       res.statusCode = 404;
       res.end('{}');
     });
@@ -606,70 +612,79 @@ test('ElevenLabs: 台本全体を1回で読み、セリフごとに切り分け�
   const saved = { ...config.eleven };
   const savedDir = config.voicesDir;
   const savedProvider = config.tts.provider;
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'eleven-dialogue-'));
-  Object.assign(config.eleven, { apiKey: 'k', baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, model: 'eleven_v3', language: 'ja' });
+  const savedKey = config.openaiKey;
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'eleven-v4-'));
+  Object.assign(config.eleven, { apiKey: 'k', baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, model: 'eleven_v4', language: 'ja', verify: true, sttModel: 'scribe_v2' });
   config.voicesDir = tmp;
   config.tts.provider = 'elevenlabs';
+  config.openaiKey = ''; // 判定は照合だけで（OpenAI は使わない）
   try {
     const project = Project.parse(structuredClone(sample));
-    project.audio.elevenStability = 'creative';
+    const target = project.scenes.flatMap((s) => s.lines).find((l) => l.text.startsWith('だったら'))!;
+    target.speak = undefined;
+    target.tags = ['confident'];
     for (const s of project.scenes) for (const l of s.lines) l.audio = undefined;
-    const lines = project.scenes.flatMap((s) => s.lines);
-    const r = await generateNarration(project, tmp);
-    assert.equal(r.generated, lines.length);
-    const dialogues = reqs.filter((x) => x.url.startsWith('/v1/text-to-dialogue/'));
-    assert.equal(dialogues.length, 1, 'one take for the whole script');
-    const body = JSON.parse(dialogues[0].body);
-    assert.equal(body.inputs.length, lines.length);
-    assert.equal(body.settings.stability, 0);
-    assert.equal(body.inputs[0].text, elevenSpeechText(lines[0]));
-    // 同じキャラは同じ声（標準の声を1回だけクローン）
-    assert.deepEqual([...new Set(body.inputs.map((x: { voice_id: string }) => x.voice_id))].sort(), ['v-osushi', 'v-saki']);
-    assert.equal(reqs.filter((x) => x.url === '/v1/voices/add').length, 2);
-    for (const [i, l] of lines.entries()) {
-      assert.equal(body.inputs[i].voice_id, l.speaker === 'saki' ? 'v-saki' : 'v-osushi');
-      assert.ok(l.audio && fs.existsSync(path.join(tmp, l.audio.src)), `${l.id} saved`);
-      assert.ok(l.audio!.durationSec > 0.45 && l.audio!.durationSec < 0.85, `${l.id} cut to its own segment (${l.audio!.durationSec})`);
-      assert.equal(isAudioStale(l, project.cast, engineKey(engineId('elevenlabs'), project.audio)), false);
-    }
-    // 1つ変えると、全体を読み直す（シーンによって声が変わらないように）
-    lines[3].tags = ['sighs', 'sad'];
+    const r = await generateNarration(project, tmp, { only: [target.id], force: true });
+    assert.equal(r.generated, 1);
+    const dialogue = reqs.filter((x) => x.url.startsWith('/v1/text-to-dialogue'));
+    // 1回目は途中で切れていた → 作り直し（2回作る）
+    assert.equal(dialogue.length, 2, 'retaken once after a truncated read');
+    const body = JSON.parse(dialogue[0].body);
+    assert.equal(body.model_id, 'eleven_v4');
+    assert.equal(body.inputs.length, 1, 'one line per request');
+    assert.equal(body.inputs[0].text, '[confident] だったら、SUSHI TOP OCR！');
+    assert.equal(body.inputs[0].voice_id, 'v-saki');
+    assert.ok(body.settings.stability != null);
+    assert.equal(reqs.filter((x) => x.url === '/v1/speech-to-text').length, 2);
+    assert.match(reqs.find((x) => x.url === '/v1/speech-to-text')!.body, /SUSHI TOP OCR/, 'brand name sent as a key term');
+    assert.deepEqual(target.audio?.check, { ok: true, heard: 'だったら、SUSHI TOP OCR！' });
+    // v4 が使えない時は v3（Text to Speech）に切り替える
+    v4Ok = false;
     reqs.length = 0;
-    assert.equal((await generateNarration(project, tmp)).generated, lines.length);
-    assert.equal(reqs.filter((x) => x.url.startsWith('/v1/text-to-dialogue/')).length, 1);
-    // 1セリフだけの作り直しは、そのセリフだけ（前後の文を手がかりに）
-    reqs.length = 0;
-    assert.equal((await generateNarration(project, tmp, { only: [lines[5].id], force: true })).generated, 1);
-    const one = JSON.parse(reqs.find((x) => x.url.startsWith('/v1/text-to-dialogue/'))!.body);
-    assert.equal(one.inputs.length, 1);
-    assert.equal(one.previous_text, speechText(lines[4]));
-    // まとめて読めない時は、1セリフずつ作る
-    dialogueOk = false;
-    for (const l of lines) l.audio = undefined;
-    reqs.length = 0;
-    assert.equal((await generateNarration(project, tmp)).generated, lines.length);
-    assert.equal(reqs.filter((x) => x.url.startsWith('/v1/text-to-speech/')).length, lines.length);
-    for (const l of lines) assert.ok(l.audio, `${l.id} saved by fallback`);
+    target.tags = ['excited'];
+    await generateNarration(project, tmp, { only: [target.id], force: true });
+    assert.ok(reqs.some((x) => x.url.startsWith('/v1/text-to-speech/v-saki')), 'fell back to eleven_v3');
+    assert.equal(JSON.parse(reqs.find((x) => x.url.startsWith('/v1/text-to-speech/'))!.body).model_id, 'eleven_v3');
   } finally {
     Object.assign(config.eleven, saved);
     config.voicesDir = savedDir;
     config.tts.provider = savedProvider;
+    config.openaiKey = savedKey;
     server.close();
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 });
 
-test('ElevenLabs: 長い台本はシーンの区切りで分けて読む', () => {
-  const p = Project.parse(structuredClone(sample));
-  const entries = p.scenes.map((s) => s.lines.map((l) => ({ line: l, hash: '', input: { text: 'あ'.repeat(700), voice: voiceFor(l.speaker, p.cast) } })));
-  const chunks = dialogueChunks(entries);
-  assert.ok(chunks.length > 1);
-  // シーンの途中では切らない・どの塊も上限以内（1シーンだけで上限を超える場合を除く）
-  assert.equal(chunks.flat().length, entries.flat().length);
-  for (const c of chunks) {
-    const scenes = new Set(c.map((e) => p.scenes.findIndex((s) => s.lines.includes(e.line))));
-    for (const si of scenes) assert.ok(entries[si].every((e) => c.includes(e)), 'scene kept together');
-  }
+test('読み上げの確認: 表記の違いは許し、読み落とし・途中で切れる・違う言葉は見つける', () => {
+  const exp = ['だったら、SUSHI TOP OCR！'];
+  assert.ok(speechScore(exp, 'だったら SUSHI TOP OCR') >= SURE_OK);
+  assert.ok(speechScore(['レシートを撮るだけで'], 'レシートを撮るだけで。') >= SURE_OK);
+  // カタカナ/ひらがな・長音・記号の違いは同じとみなす
+  assert.ok(speechScore(['いいね〜！'], 'イイネ') >= SURE_OK);
+  // 漢字をかなで書き起こしても、途切れほどは下がらない（OpenAI が無い時の基準 0.5 を超える）
+  assert.ok(speechScore(['アプリも大変で〜……'], 'あぷりもたいへんで') >= 0.5);
+  // 途中で切れている
+  assert.ok(speechScore(exp, 'だったら') < 0.5);
+  // 違う言葉
+  assert.ok(speechScore(['特典を出し分け！'], '特典をお届け！') < SURE_OK);
+  // 余計な言葉が足されている
+  assert.ok(speechScore(['なにがいいの？'], 'ええと、それで、なにがいいのかなあ、教えてほしいな') < SURE_OK);
+  // 読み方を指定している時は、どちらかに合えばよい
+  assert.ok(speechScore(['POS改修なしで', 'ポス改修なしで'], 'ポス改修なしで') >= SURE_OK);
+  assert.equal(normalizeSpeech('[excited] [[SUSHI]] トップ！'), 'sushiとっぷ');
+  assert.deepEqual(keytermsOf('だったら、SUSHI TOP OCR！ AIが'), ['SUSHI TOP OCR', 'AI']);
+});
+
+test('ElevenLabs の音声は、間のあとの小さな語尾や小声を切らない', () => {
+  const rate = 24000;
+  const s = new Float32Array(rate * 2);
+  // 大きな声 0.5秒 → 間 0.3秒 → 小さな語尾 0.3秒（本体の2割の大きさ）
+  for (let i = 2400; i < 2400 + 12000; i++) s[i] = Math.sin(i / 5) * 0.5;
+  for (let i = 21600; i < 21600 + 7200; i++) s[i] = Math.sin(i / 5) * 0.1;
+  const strict = trimAndNormalize(s, rate);
+  const gentle = trimAndNormalize(s, rate, { gentle: true });
+  assert.ok(strict.length / rate < 0.8, 'Irodori 向けは取り残された音として外す');
+  assert.ok(gentle.length / rate > 1.15, `ElevenLabs 向けは語尾を残す (${(gentle.length / rate).toFixed(2)}s)`);
 });
 
 test('レイヤー: 既定の重なり順は描画の順と同じ（キャラは小さい順・小道具・吹き出し・字幕が手前）', () => {

@@ -127,7 +127,6 @@
           "text": "SUSHI TOP OCR！",
           "style": "none",
           "pose": "happy",
-          "speak": "スシ、トップ、オーシーアール！",
           "delivery": "元気よく、CMの掛け声のように",
           "audio": {
             "src": "audio/l1-1f860dffe082d8.wav",
@@ -257,7 +256,6 @@
           "text": "……って、なに？",
           "style": "bubble",
           "emoji": "🤔",
-          "speak": "え〜、って、なに？",
           "pose": "think",
           "delivery": "きょとんと首をかしげて",
           "audio": {
@@ -399,7 +397,6 @@
           "text": "マストバイ施策、\n高くつかない？",
           "style": "bubble-accent",
           "pose": "think",
-          "speak": "マストバイ施策、高くつかない？",
           "delivery": "共感を込めて、問いかけるように",
           "audio": {
             "src": "audio/l3-073fd0dd59c656.wav",
@@ -490,7 +487,6 @@
           "style": "bubble",
           "emoji": "🥺",
           "pose": "sad",
-          "speak": "アプリも、大変で〜……",
           "delivery": "しょんぼりして、小さな声で",
           "audio": {
             "src": "audio/l4-125a0233f1eab8.wav",
@@ -613,7 +609,6 @@
           "text": "だったら、\nSUSHI TOP OCR！",
           "style": "bubble",
           "pose": "point",
-          "speak": "だったら、スシ、トップ、オーシーアール！",
           "delivery": "自信たっぷりに、明るく",
           "audio": {
             "src": "audio/l5-08525c6e70119c.wav",
@@ -895,7 +890,6 @@
           "style": "none",
           "emoji": "💪",
           "pose": "happy",
-          "speak": "エーアイが自動判定！",
           "delivery": "力強く、ここがポイントという感じで",
           "audio": {
             "src": "audio/l8-03c54fd77872d7.wav",
@@ -1340,7 +1334,6 @@
           "text": "POS改修なしで",
           "style": "none",
           "pose": "default",
-          "speak": "ピーオーエス改修なしで",
           "delivery": "落ち着いて、安心感を持たせて",
           "audio": {
             "src": "audio/l13-175bbced990e55.wav",

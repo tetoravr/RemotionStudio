@@ -12,6 +12,7 @@ export type Meta = {
       configured: boolean;
       online: boolean;
       model: string;
+      requestedModel?: string;
       error?: string;
       quota?: { used: number; limit: number; resetAt?: number; tier?: string };
       canClone?: boolean;
