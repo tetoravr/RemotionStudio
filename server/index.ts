@@ -35,7 +35,10 @@ app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Referrer-Policy', 'same-origin');
   // ログインが要る中身は、前段の CDN（ポータルからのリライト経由など）に残さない
-  if (/^\/(api|auth|files)\//.test(req.path)) res.setHeader('Cache-Control', 'private, no-store');
+  if (/^\/files\/[^/]+\/audio\//.test(req.path))
+    // セリフの音声は作るたびに別の名前になり、中身は変わらない。ブラウザに残して、再生のたびに読み込み直さない
+    res.setHeader('Cache-Control', 'private, max-age=31536000, immutable');
+  else if (/^\/(api|auth|files)\//.test(req.path)) res.setHeader('Cache-Control', 'private, no-store');
   next();
 });
 app.use(authRouter());

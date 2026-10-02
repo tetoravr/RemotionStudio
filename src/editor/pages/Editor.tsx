@@ -3,7 +3,9 @@ import {
   ChevronLeft, CircleAlert, Download, RectangleHorizontal, RectangleVertical, Redo2, Sparkles, Square, Undo2, X,
 } from 'lucide-react';
 import React, { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { AdVideo } from '../../video/AdVideo';
+import { prefetch } from 'remotion';
+import { AdVideo, makeAssetResolver } from '../../video/AdVideo';
+import { audioSources } from '../../video/AudioTrack';
 import { applyTextTarget, readAdjust, sceneLayout, setSceneLayout, type TextTarget } from '../../video/edit/textEdit';
 import { EditModeProvider, type EditMode } from '../../video/edit/Editable';
 import { isAudioStale } from '../../video/narrationKey';
@@ -335,6 +337,32 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
   const inputProps = useMemo(
     () => (project ? { project, assetBaseUrl: withBase(`/files/${project.id}/`), mutedLines: mutedKey ? mutedKey.split(',') : [] } : null),
     [project, mutedKey],
+  );
+
+  // 動画で鳴らす音声を先に読み込んでおく。読み込みが再生に間に合わないと、セリフが遅れたり途切れたりする
+  // （2回目は読み込み済みなので問題なく流れる、という症状の原因）。読み込んだ音声は <Audio> が自動で使う
+  const audioKey = useMemo(
+    () => (project && timeline && inputProps ? audioSources(timeline, project, makeAssetResolver(inputProps.assetBaseUrl), inputProps.mutedLines).join('\n') : ''),
+    [project, timeline, inputProps],
+  );
+  const prefetched = useRef(new Map<string, () => void>());
+  useEffect(() => {
+    const want = new Set(audioKey ? audioKey.split('\n') : []);
+    const have = prefetched.current;
+    for (const [src, free] of have) if (!want.has(src)) (free(), have.delete(src));
+    for (const src of want)
+      if (!have.has(src)) {
+        const h = prefetch(src, { method: 'blob-url' });
+        h.waitUntilDone().catch(() => have.delete(src));
+        have.set(src, h.free);
+      }
+  }, [audioKey]);
+  useEffect(
+    () => () => {
+      for (const free of prefetched.current.values()) free();
+      prefetched.current.clear();
+    },
+    [],
   );
 
   const curIdx = project && timeline ? timeline.scenes.findIndex((st) => frame >= st.start && frame < st.start + st.duration) : -1;
