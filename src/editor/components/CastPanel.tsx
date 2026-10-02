@@ -12,6 +12,7 @@ import { Cell, Disclosure, Field, FilePick, MenuItem, Num, Popover, Section, Sel
 import { ElevenVoiceSheet, elevenVoiceLabel } from './ElevenVoice';
 import { assetUrl, POSE_LABELS, poseImage } from './pickers';
 import { VoiceLab } from './VoiceLab';
+import { withBase } from '../base';
 
 export { assetUrl };
 
@@ -143,7 +144,7 @@ const CastCard: React.FC<{ project: Project; member: CastMember; index: number; 
           {Object.entries(LIBRARY_CHARACTERS).map(([id, lc]) => (
             <button key={id} type="button" className={`char-option ${c.library === id ? 'on' : ''}`} onClick={() => (c.library === id ? undefined : applyLibrary(id))}>
               <span className="img">
-                <img src={`/characters/${id}/default.webp`} alt="" />
+                <img src={withBase(`/characters/${id}/default.webp`)} alt="" />
               </span>
               {lc.name}
             </button>
@@ -276,7 +277,7 @@ const VoiceSheet: React.FC<{ member: CastMember; set: (fn: (m: CastMember) => vo
 const RefVoiceActions: React.FC<{ id: string }> = ({ id }) => {
   const [playing, setPlaying] = useState(false);
   const audio = useRef<HTMLAudioElement | null>(null);
-  const url = `/api/tts/voices/${encodeURIComponent(id)}/file`;
+  const url = withBase(`/api/tts/voices/${encodeURIComponent(id)}/file`);
   return (
     <div className="hstack">
       <button

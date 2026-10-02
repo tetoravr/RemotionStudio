@@ -3,8 +3,12 @@ import path from 'node:path';
 
 export const ROOT = path.resolve(import.meta.dirname, '..');
 
+/** 公開するパス（例: /video-creator）。ポータルのサブパスでリライト経由で配信する時に使う。空ならルート */
+const basePath = (process.env.BASE_PATH || '').trim().replace(/^\/*/, '/').replace(/\/+$/, '');
+
 export const config = {
   port: Number(process.env.PORT || 3210),
+  basePath,
   /** 既定はローカルのみ。LAN に公開する場合は HOST=0.0.0.0 */
   host: process.env.HOST || '127.0.0.1',
   projectsDir: path.resolve(ROOT, process.env.PROJECTS_DIR || 'projects'),

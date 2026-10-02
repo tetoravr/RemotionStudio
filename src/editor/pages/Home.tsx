@@ -6,6 +6,7 @@ import { go, MetaContext } from '../App';
 import { confirmDialog, errorDialog } from '../components/Dialogs';
 import { MenuItem, Popover, Sheet } from '../components/Fields';
 import { Ic } from '../icons';
+import { withBase } from '../base';
 
 /** 「今日 14:32」「昨日」「9月28日」のような短い日時 */
 const when = (iso?: string) => {
@@ -52,7 +53,7 @@ const UserMenu: React.FC = () => {
             icon={LogOut}
             onClick={async () => {
               await api.logout();
-              window.location.href = '/auth/login';
+              window.location.href = withBase('/auth/login');
             }}
           >
             ログアウト
@@ -217,7 +218,7 @@ export const Home: React.FC = () => {
     <div className="home">
       <header className="home-bar">
         <div className="wordmark">
-          <img className="logo" src="/brand/logo.png" alt="" />
+          <img className="logo" src={withBase('/brand/logo.png')} alt="" />
           Video Creator
         </div>
         <span className="spacer" />

@@ -7,6 +7,7 @@ import { computeTimeline } from '../../video/timeline';
 import { Ic } from '../icons';
 import { SCENE_META, SCENE_ORDER, sceneSummary } from '../sceneMeta';
 import { MenuItem, Popover } from './Fields';
+import { withBase } from '../base';
 
 type Props = {
   project: Project;
@@ -39,7 +40,7 @@ const SceneThumb = memo<{ inputProps: Record<string, unknown>; frame: number; to
 export const SceneNavigator: React.FC<Props> = ({ project, selected, stale, onSelect, onMove, onDuplicate, onDelete, onAdd }) => {
   const deferred = useDeferredValue(project);
   const tl = useMemo(() => computeTimeline(deferred), [deferred]);
-  const inputProps = useMemo(() => ({ project: deferred, assetBaseUrl: `/files/${deferred.id}/` }), [deferred]);
+  const inputProps = useMemo(() => ({ project: deferred, assetBaseUrl: withBase(`/files/${deferred.id}/`) }), [deferred]);
   const fmt = FORMATS[deferred.format];
   // 縦長・正方形・横長で、同じくらいの大きさに見えるように（横長は文字の幅を残す）
   const ratio = fmt.width / fmt.height;

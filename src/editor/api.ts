@@ -1,5 +1,6 @@
 import { engineKey, type TtsProvider } from '../video/narrationKey';
 import type { Project } from '../video/schema';
+import { withBase } from './base';
 
 export type Meta = {
   openai: boolean;
@@ -70,7 +71,7 @@ export type Job = {
 const json = async <T,>(res: Response): Promise<T> => {
   // ログインが切れていたら、ログイン画面へ（戻り先に今の画面を付ける）
   if (res.status === 401) {
-    window.location.href = `/auth/login?next=${encodeURIComponent(window.location.pathname + window.location.hash)}`;
+    window.location.href = `${withBase('/auth/login')}?next=${encodeURIComponent(window.location.pathname + window.location.hash)}`;
     throw new Error('ログインしてください');
   }
   const body = await res.json().catch(() => ({}));

@@ -9,6 +9,7 @@ import { Ic } from '../icons';
 import { confirmDialog } from './Dialogs';
 import { MenuItem, Popover } from './Fields';
 import { Avatar, speakerName } from './pickers';
+import { withBase } from '../base';
 
 /** セリフ音声の再生（1つずつ／通し）。再生中のセリフIDを返す */
 export const useNarrationPlayer = (project: Project) => {
@@ -28,7 +29,7 @@ export const useNarrationPlayer = (project: Project) => {
   const playOne = useCallback(
     (id: string, src: string) =>
       new Promise<void>((resolve) => {
-        const a = new Audio(`/files/${project.id}/${src}?t=${Date.now()}`);
+        const a = new Audio(withBase(`/files/${project.id}/${src}?t=${Date.now()}`));
         audio.current = a;
         setPlaying(id);
         a.onended = () => resolve();

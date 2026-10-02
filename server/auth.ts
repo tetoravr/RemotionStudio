@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import type { NextFunction, Request, Response, Router } from 'express';
 import express from 'express';
+import { config } from './env';
 
 /**
  * Google アカウントでのログイン（社内公開用）。許可したドメインのアカウントだけが使える。
@@ -29,7 +30,7 @@ export const authConfig = () => ({
   domains: list('AUTH_ALLOWED_DOMAINS'),
   emails: list('AUTH_ALLOWED_EMAILS'),
   // Render では公開URL（https://<名前>.onrender.com）が RENDER_EXTERNAL_URL に入るので、PUBLIC_URL を省略できる
-  publicUrl: (env('PUBLIC_URL') || env('RENDER_EXTERNAL_URL')).replace(/\/+$/, ''),
+  publicUrl: (env('PUBLIC_URL') || (env('RENDER_EXTERNAL_URL') && env('RENDER_EXTERNAL_URL').replace(/\/+$/, '') + config.basePath)).replace(/\/+$/, ''),
   secret: env('SESSION_SECRET'),
 });
 
@@ -51,6 +52,9 @@ export const authProblems = () => {
 };
 
 export type SessionUser = { email: string; name: string; picture?: string };
+
+/** ログイン画面の URL（BASE_PATH の下） */
+const LOGIN = `${config.basePath}/auth/login`;
 
 const COOKIE = 'adstudio_session';
 const STATE_COOKIE = 'adstudio_oauth';
@@ -116,7 +120,7 @@ export const authRouter = (): Router => {
   r.get('/auth/login', (req, res) => {
     const c = authConfig();
     const state = crypto.randomBytes(16).toString('hex');
-    const back = typeof req.query.next === 'string' && req.query.next.startsWith('/') && !req.query.next.startsWith('//') ? req.query.next : '/';
+    const back = typeof req.query.next === 'string' && req.query.next.startsWith('/') && !req.query.next.startsWith('//') ? req.query.next : `${config.basePath}/`;
     setCookie(res, STATE_COOKIE, seal({ state, back }, c.secret, 600), 600);
     const q = new URLSearchParams({
       client_id: c.clientId,
@@ -162,7 +166,7 @@ export const authRouter = (): Router => {
       }
       const user: SessionUser = { email: info.email, name: info.name ?? info.email, picture: info.picture };
       setCookie(res, COOKIE, seal(user, c.secret, MAX_AGE_SEC), MAX_AGE_SEC);
-      res.redirect(saved.back || '/');
+      res.redirect(saved.back || `${config.basePath}/`);
     } catch (e) {
       res.status(500).send(page('ログインに失敗しました', (e as Error).message, true));
     }
@@ -187,10 +191,10 @@ export const requireLogin = (req: Request, res: Response, next: NextFunction) =>
   if (req.path.startsWith('/auth/') || req.path.startsWith('/brand/') || req.path === '/healthz') return next();
   if (currentUser(req)) return next();
   if (req.path.startsWith('/api/') || req.path.startsWith('/files/')) {
-    res.status(401).json({ error: 'ログインしてください', login: '/auth/login' });
+    res.status(401).json({ error: 'ログインしてください', login: LOGIN });
     return;
   }
-  res.redirect(`/auth/login?next=${encodeURIComponent(req.originalUrl)}`);
+  res.redirect(`${LOGIN}?next=${encodeURIComponent(req.originalUrl)}`);
 };
 
 const page = (title: string, message: string, retry = false) =>
@@ -198,4 +202,4 @@ const page = (title: string, message: string, retry = false) =>
 <body style="font-family:sans-serif;background:#0f1117;color:#e8eaf2;display:grid;place-items:center;min-height:100vh;margin:0">
 <div style="max-width:420px;padding:28px;border:1px solid #2a2f3d;border-radius:14px;background:#171a23">
 <h2 style="margin:0 0 12px">${title}</h2><p style="color:#a3a8b8;line-height:1.7">${message.replace(/</g, '&lt;')}</p>
-<a href="/auth/login" style="color:#9d86ff">${retry ? '別のアカウントでログイン' : 'ログイン'}</a></div></body></html>`;
+<a href="${LOGIN}" style="color:#9d86ff">${retry ? '別のアカウントでログイン' : 'ログイン'}</a></div></body></html>`;
