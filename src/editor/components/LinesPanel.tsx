@@ -305,10 +305,10 @@ const VoiceStatus: React.FC<{ line: Line; stale: boolean; onRedo: () => void }> 
   if (stale) {
     if (voice.waiting.has(l.id))
       return (
-        <span className="voice-chip wait" title="入力が落ち着いたら、自動で作り直します">
+        <button type="button" className="voice-chip wait" onClick={onRedo} title="入力が落ち着いたら自動で作り直します（押すとすぐ作ります）">
           <Ic n={RefreshCw} size={11} mr={0} />
           まもなく音声を更新
-        </span>
+        </button>
       );
     return (
       <button type="button" className="voice-chip action" onClick={onRedo} disabled={!voice.ready} title="今のセリフで音声を作り直します">

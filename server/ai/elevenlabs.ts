@@ -306,7 +306,7 @@ export const resolveElevenVoice = async (voice: VoiceWithLibrary): Promise<strin
         if (file && ref) {
           const label = (await localVoices()).find((v) => v.id === ref)?.label ?? ref;
           try {
-            made = { voiceId: await cloneVoice({ name: `${label}（Ad Studio）`, audio: await fs.readFile(file), filename: path.basename(file), description: 'Ad Studio の標準の声' }), label };
+            made = { voiceId: await cloneVoice({ name: `${label}（Video Creator）`, audio: await fs.readFile(file), filename: path.basename(file), description: 'Video Creator の標準の声' }), label };
           } catch (e) {
             // クローンできないプランでは、声のイメージから作る
             console.warn(`[elevenlabs] ${ref} をクローンできませんでした: ${(e as Error).message}`);
@@ -316,7 +316,7 @@ export const resolveElevenVoice = async (voice: VoiceWithLibrary): Promise<strin
           const description = designDescription(voice);
           const previews = await designVoice({ description, seed: parseInt(sha(description).slice(0, 7), 16) });
           if (!previews.length) throw new Error('ElevenLabs で声を作れませんでした');
-          const label = `${description.slice(0, 24)}（Ad Studio）`;
+          const label = `${description.slice(0, 24)}（Video Creator）`;
           made = { voiceId: await adoptDesignedVoice({ generatedVoiceId: previews[0].generatedVoiceId, name: label, description }), label };
         }
         const c = await readCache();

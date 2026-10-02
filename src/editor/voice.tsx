@@ -52,7 +52,7 @@ export const useVoiceUpdater = ({
   const [progress, setProgress] = useState<VoiceState['progress']>(null);
   const [failed, setFailed] = useState<Record<string, { hash: string; message: string }>>({});
   const busy = useRef(false);
-  const queue = useRef<{ ids: string[] | 'stale'; force: boolean; done: () => void }[]>([]);
+  const queue = useRef<{ ids: string[] | 'stale'; done: () => void }[]>([]);
   const engineRef = useRef(engine);
   engineRef.current = engine;
 
@@ -87,7 +87,7 @@ export const useVoiceUpdater = ({
 
   /** サーバーで作った音声のうち、今の内容と合うものだけを取り込む（作っている間に変えたセリフは、また古い扱いのまま） */
   const merge = useCallback(
-    async (ids: string[]) => {
+    async (ids: string[], snapshot: Map<string, string>) => {
       const p = projectRef.current;
       if (!p) return [] as string[];
       const fresh = await api.get(p.id);
@@ -99,9 +99,13 @@ export const useVoiceUpdater = ({
             for (const l of s.lines) {
               const a = byId.get(l.id);
               if (!a || (l.audio && l.audio.src === a.src)) continue;
-              if (a.hash !== narrationHash(l, voiceFor(l.speaker, draft.cast), engineRef.current)) continue;
-              l.audio = a;
-              if (ids.includes(l.id)) got.push(l.id);
+              const now = narrationHash(l, voiceFor(l.speaker, draft.cast), engineRef.current);
+              if (ids.includes(l.id)) {
+                // 頼んだセリフは、頼んだ時から内容が変わっていなければ取り込む（今の内容の音声として）
+                if (snapshot.get(l.id) !== now) continue;
+                l.audio = { ...a, hash: now };
+                got.push(l.id);
+              } else if (a.hash === now) l.audio = a;
             }
         },
         { silent: true },
@@ -112,7 +116,9 @@ export const useVoiceUpdater = ({
   );
 
   const runOne = useCallback(
-    async (ids: string[] | 'stale', force: boolean) => {
+    async (ids: string[] | 'stale') => {
+      // 直前の入力（ボタンを押す直前の書き換え）が画面のデータに入るのを待つ
+      await new Promise((r) => setTimeout(r, 60));
       const p = projectRef.current;
       if (!p) return;
       const list =
@@ -123,15 +129,19 @@ export const useVoiceUpdater = ({
       setRunning(new Set(list));
       setProgress({ done: 0, total: list.length, message: '' });
       let error: string | null = null;
+      let snapshot = new Map<string, string>();
       try {
         // 画面の編集を先に保存してから作る（サーバーは保存された内容で作る）
         await flush();
+        const saved = projectRef.current ?? p;
+        snapshot = new Map(list.map((id) => [id, hashOf(saved, id)]));
         let jobId: string | null = null;
         for (let i = 0; i < 60 && !jobId; i++) {
           const res = await fetch(`/api/projects/${p.id}/narration`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ lineIds: list, force }),
+            // 頼んだセリフは必ず作る（サーバー側で「最新」と判断されて何も起きない、ということがないように）
+            body: JSON.stringify({ lineIds: list, force: true }),
           });
           const body = (await res.json().catch(() => ({}))) as { jobId?: string; error?: string };
           if (res.status === 409) {
@@ -147,13 +157,14 @@ export const useVoiceUpdater = ({
       } catch (e) {
         error = (e as Error).message;
       }
-      const got = await merge(list).catch(() => [] as string[]);
+      const got = await merge(list, snapshot).catch(() => [] as string[]);
       const now = projectRef.current;
       setFailed((cur) => {
         const next = { ...cur };
         for (const id of list) {
           if (got.includes(id)) delete next[id];
-          else if (error && now) next[id] = { hash: hashOf(now, id), message: error };
+          // 失敗した時だけ記録する（作っている間に書き換えたセリフは、次にまた作る）
+          else if (error && now && hashOf(now, id) === snapshot.get(id)) next[id] = { hash: snapshot.get(id)!, message: error };
         }
         return next;
       });
@@ -170,7 +181,7 @@ export const useVoiceUpdater = ({
     try {
       while (queue.current.length) {
         const job = queue.current.shift()!;
-        await runOne(job.ids, job.force);
+        await runOne(job.ids);
         job.done();
       }
     } finally {
@@ -183,7 +194,7 @@ export const useVoiceUpdater = ({
       new Promise<void>((done) => {
         if (Array.isArray(ids)) setFailed((cur) => Object.fromEntries(Object.entries(cur).filter(([k]) => !ids.includes(k))));
         else setFailed({});
-        queue.current.push({ ids, force: Boolean(opts.force), done });
+        queue.current.push({ ids, done });
         void pump();
       }),
     [pump],

@@ -1,4 +1,4 @@
-# Ad Studio（エディター＋APIサーバー＋書き出し）
+# Video Creator（エディター＋APIサーバー＋書き出し）
 # ナレーションは ElevenLabs（.env の ELEVENLABS_API_KEY）。Irodori-TTS を使う時は GPU のある別サーバーで動かし、TTS_PROVIDER=irodori と IRODORI_TTS_URL でつなぐ
 FROM node:22-bookworm-slim
 

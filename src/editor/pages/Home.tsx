@@ -1,4 +1,4 @@
-import { Clapperboard, Copy, Ellipsis, LayoutTemplate, LogOut, Plus, Sparkles, Trash2 } from 'lucide-react';
+import { Copy, Ellipsis, LayoutTemplate, LogOut, Plus, Sparkles, Trash2 } from 'lucide-react';
 import React, { useContext, useEffect, useState } from 'react';
 import { FORMATS } from '../../video/schema';
 import { api, type ProjectSummary } from '../api';
@@ -217,10 +217,8 @@ export const Home: React.FC = () => {
     <div className="home">
       <header className="home-bar">
         <div className="wordmark">
-          <span className="logo">
-            <Ic n={Clapperboard} size={13} mr={0} />
-          </span>
-          Ad Studio
+          <img className="logo" src="/brand/logo.png" alt="" />
+          Video Creator
         </div>
         <span className="spacer" />
         <UserMenu />

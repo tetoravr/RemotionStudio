@@ -678,7 +678,7 @@ if (authEnabled() && authProblems().length) console.warn(`  ⚠ ログイン設�
 await seedSamples();
 await emptyTrash();
 app.listen(config.port, config.host, async () => {
-  console.log(`\n  Ad Studio server: http://localhost:${config.port}`);
+  console.log(`\n  Video Creator server: http://localhost:${config.port}`);
   console.log(`  ログイン: ${authEnabled() ? `Google（${[...(process.env.AUTH_ALLOWED_DOMAINS ?? '').split(','), ...(process.env.AUTH_ALLOWED_EMAILS ?? '').split(',')].filter(Boolean).join(', ')}）` : 'なし（このPCだけで使う設定）'}`);
   console.log(`  OpenAI: ${hasOpenAI() ? `有効 (${config.models.text} / ${config.models.tts} / ${config.models.image})` : '未設定（.env に OPENAI_API_KEY を設定すると AI 機能が使えます）'}`);
   const provider = resolveProvider('auto');

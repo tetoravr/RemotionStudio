@@ -561,6 +561,7 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
           >
             <Ic n={ChevronLeft} size={20} mr={0} />
           </button>
+          <img className="tb-logo" src="/brand/logo.png" alt="Video Creator" title="Video Creator" />
           <div className="doc-title">
             <input value={project.title} onChange={(e) => update((p) => void (p.title = e.target.value))} aria-label="タイトル" />
             <span className="status" style={saveState === 'error' ? { color: 'var(--red)' } : undefined}>

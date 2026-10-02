@@ -58,7 +58,7 @@ export const AudioPanel: React.FC<{ project: Project; update: Update; runJob: Ru
               {tts.ready ? '接続中' : tts.provider === 'elevenlabs' && !el.configured ? 'キー未設定' : '未接続'}
             </span>
           </Cell>
-          <Cell label="セリフを変えたら自動で音声を作り直す" sub="入力が落ち着いてから、変えたセリフだけを作り直します。オフにすると、セリフごとの「音声を作り直す」で作ります">
+          <Cell label="セリフを変えたら自動で音声を作り直す" sub="オフ（標準）: セリフを書き換えたら、セリフの「音声を作り直す」を押して作ります。オン: 入力が落ち着いてから、変えたセリフだけを自動で作り直します">
             <Toggle checked={a.autoVoice} disabled={!a.narration} onChange={(v) => update((p) => void (p.audio.autoVoice = v))} />
           </Cell>
           {tts.provider === 'elevenlabs' && speakCount ? (

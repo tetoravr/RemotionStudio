@@ -182,7 +182,7 @@ export const authRouter = (): Router => {
 /** ログインしていないリクエストを止める。API は 401、画面はログインへ転送 */
 export const requireLogin = (req: Request, res: Response, next: NextFunction) => {
   if (!authEnabled()) return next();
-  if (req.path.startsWith('/auth/') || req.path === '/healthz') return next();
+  if (req.path.startsWith('/auth/') || req.path.startsWith('/brand/') || req.path === '/healthz') return next();
   if (currentUser(req)) return next();
   if (req.path.startsWith('/api/') || req.path.startsWith('/files/')) {
     res.status(401).json({ error: 'ログインしてください', login: '/auth/login' });

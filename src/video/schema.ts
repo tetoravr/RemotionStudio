@@ -316,8 +316,8 @@ export const AudioSettings = z.object({
    * creative=感情豊か（タグが効きやすいが崩れやすい）/ natural / robust=安定
    */
   elevenStability: z.enum(['creative', 'natural', 'robust']).default('natural'),
-  /** セリフを変えたら、そのセリフの音声を自動で作り直す（エディターで、入力が落ち着いてから） */
-  autoVoice: z.boolean().default(true),
+  /** セリフを変えたら、そのセリフの音声を自動で作り直す（エディターで、入力が落ち着いてから）。オフならセリフの「音声を作り直す」で作る */
+  autoVoice: z.boolean().default(false),
   narrationVolume: z.number().min(0).max(2).default(1),
 });
 export type AudioSettings = z.infer<typeof AudioSettings>;
