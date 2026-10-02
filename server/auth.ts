@@ -10,6 +10,7 @@ import express from 'express';
  *   AUTH_ALLOWED_DOMAINS … 許可するドメイン（カンマ区切り。例: tetoravr.com）
  *   AUTH_ALLOWED_EMAILS  … ドメイン外で個別に許可するメールアドレス（任意・カンマ区切り）
  *   PUBLIC_URL           … 公開URL（例: https://studio.example.com）。Google のリダイレクトURIは <PUBLIC_URL>/auth/callback
+ *                          （Render では省略可。RENDER_EXTERNAL_URL を使う）
  *   SESSION_SECRET       … セッションの署名用の長いランダム文字列
  *
  * ログイン状態は署名付きの Cookie に入れる（サーバー側に保存しないので、再起動してもログインは続く）。
@@ -27,7 +28,8 @@ export const authConfig = () => ({
   clientSecret: env('GOOGLE_CLIENT_SECRET'),
   domains: list('AUTH_ALLOWED_DOMAINS'),
   emails: list('AUTH_ALLOWED_EMAILS'),
-  publicUrl: env('PUBLIC_URL').replace(/\/+$/, ''),
+  // Render では公開URL（https://<名前>.onrender.com）が RENDER_EXTERNAL_URL に入るので、PUBLIC_URL を省略できる
+  publicUrl: (env('PUBLIC_URL') || env('RENDER_EXTERNAL_URL')).replace(/\/+$/, ''),
   secret: env('SESSION_SECRET'),
 });
 

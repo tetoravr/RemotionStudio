@@ -22,5 +22,5 @@ ENV NODE_ENV=production \
 EXPOSE 3210
 # プロジェクト（台本・音声・画像・書き出し動画）と参照音声、製品のUI画面はボリュームに置く
 VOLUME ["/app/projects", "/app/voices", "/app/SUSHI UI"]
-HEALTHCHECK --interval=30s --timeout=5s CMD node -e "fetch('http://127.0.0.1:3210/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+HEALTHCHECK --interval=30s --timeout=5s CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||3210)+'/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 CMD ["npx", "tsx", "server/index.ts"]

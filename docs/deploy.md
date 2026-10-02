@@ -2,7 +2,7 @@
 
 エディターを社内のメンバーがブラウザから使えるようにする手順です。**会社の Google アカウントでログインした人だけ**が使えます。
 
-公開の方法は2通りあります。どちらでも、アプリ側の設定（手順 1・2）は同じです。
+公開の方法は3通りあります。どれでも、Google ログインの準備（手順 1）は同じです。Render を使う時は [C. Render で動かす](#c-render-で動かす) へ。
 
 | | A. この PC から公開する | B. クラウドのサーバーで動かす |
 |---|---|---|
@@ -84,6 +84,40 @@ Docker で動かす場合は `.env` に `CLOUDFLARE_TUNNEL_TOKEN=` を書き、`
 - **音声**: ナレーションは ElevenLabs（`ELEVENLABS_API_KEY`）で作るので、サーバーに GPU は不要です。Irodori-TTS を使う場合は GPU サーバーで [Irodori-TTS-Server](https://github.com/Aratako/Irodori-TTS-Server) を動かし、`TTS_PROVIDER=irodori` と `IRODORI_TTS_URL` でつなぎます。
 - **保存先**: `projects/`（台本・音声・画像・書き出した動画）、`voices/`（参照音声・ElevenLabs に登録した標準の声の対応表）、`SUSHI UI/`（製品の画面）はボリュームに残ります。定期的にバックアップしてください。
 - **台数**: 処理の進み具合をメモリで持っているので、サーバーは1台で動かしてください。
+
+## C. Render で動かす
+
+[Render](https://render.com/) が GitHub のこのリポジトリから Docker イメージを作り、そのまま公開します。
+
+- **ビルドしたもの（`dist/` など）を GitHub に上げる必要はありません。** Render が `Dockerfile` のとおりにビルド（`npm ci` → `npm run build` → 書き出し用の Chromium の用意）します。`main` に push するたびに、自動でビルドとデプロイが行われます。
+- **API キーなどの秘密の値は GitHub に上げません。** Render の画面（サービスの「Environment」）に入力します。`.env` は git にも Docker イメージにも入りません（`.gitignore`・`.dockerignore`）。
+- 設定はリポジトリの [`render.yaml`](../render.yaml)（Blueprint）にまとめてあります。
+
+### 手順
+
+1. **Google ログインの準備**（上の手順 1）。承認済みのリダイレクト URI は `https://video-creator.onrender.com/auth/callback`
+   - サービス名が使われていて別の URL（`https://video-creator-xxxx.onrender.com` など）になった時は、デプロイ後に表示された URL に合わせて直します。
+2. Render の「New」→「**Blueprint**」→ GitHub の `tetoravr/RemotionStudio` を選ぶ
+3. 秘密の値を入力する画面が出るので、入力して「Apply」
+
+   | キー | 値 |
+   |---|---|
+   | `OPENAI_API_KEY` | OpenAI の API キー |
+   | `ELEVENLABS_API_KEY` | ElevenLabs の API キー |
+   | `GOOGLE_CLIENT_ID` | 手順 1 のクライアント ID |
+   | `GOOGLE_CLIENT_SECRET` | 手順 1 のシークレット |
+
+   - `SESSION_SECRET` は Render が自動で作ります。`AUTH_ALLOWED_DOMAINS` は `tetoravr.com` です（変える時は Environment で）。
+   - `PUBLIC_URL` は不要です（Render の URL を自動で使います）。独自ドメインをつなぐ時だけ `PUBLIC_URL=https://studio.example.com` を足し、Google のリダイレクト URI もそのドメインに変えます。
+4. デプロイが終わったら URL を開き、会社の Google アカウントでログインできれば完了です。
+
+### 知っておくこと
+
+- **プラン**: 書き出し（ヘッドレス Chromium）にメモリが要るので、`render.yaml` は **Standard（2GB）** にしています。無料プランではディスクが使えず、メモリも足りません。書き出しを速くしたい時は Pro（4GB・2CPU）に上げてください。
+- **保存先**: プロジェクト（台本・音声・画像・書き出した動画）と `voices/` は、デプロイし直しても消えないディスク（`/var/data`、10GB）に置きます。ディスクは後から増やせますが、減らせません。Render がディスクを毎日スナップショットします。
+- **台数**: ディスクを付けたサービスは1台で動きます（このアプリも1台前提です）。デプロイの切り替え時に数十秒止まります。
+- **秘密の値を変える時**: Render の画面の「Environment」で変えます（`render.yaml` に書いた `sync: false` の値は、Blueprint を最初に作る時にしか聞かれません）。値を変えると自動で再起動します。
+- **製品の画面（`SUSHI UI/`）**: 台本AIが選ぶ製品の画面は `/var/data/ui` に置きます。Render の「Shell」から入れられます（無くても動きます。動画ごとの画面は、エディターでこれまでどおり追加できます）。
 
 ---
 
