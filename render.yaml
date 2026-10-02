@@ -40,7 +40,7 @@ services:
         sync: false
       # ---- ログイン ----
       - key: AUTH_ALLOWED_DOMAINS
-        value: tetoravr.com
+        value: sushitopmarketing.com
       # セッションの署名用（Render が作る）
       - key: SESSION_SECRET
         generateValue: true
