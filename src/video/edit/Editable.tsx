@@ -53,6 +53,38 @@ type InlineText = Box & {
   fontFeatureSettings: string;
 };
 
+/* ---------------- どの要素を触ったか ---------------- */
+
+type Press = Pick<PointerEvent, 'clientX' | 'clientY' | 'target' | 'stopPropagation' | 'preventDefault'>;
+/** 映像の要素の「押された時の処理」（シーンID + 要素ID → 処理）。重なった別の要素に押した操作を渡すのに使う */
+const pressHandlers = new Map<string, (e: Press) => void>();
+const pressKey = (sceneId: string, id: string) => `${sceneId}\n${id}`;
+
+/** 何も描いていない入れ物（透明・枠なし・文字なし）。要素によっては画面いっぱいの入れ物を持っていて、下の要素へのクリックを奪ってしまう */
+const isHollow = (el: Element) => {
+  if (!(el instanceof HTMLElement)) return false; // SVG の図形・画像などは描いている
+  if (/^(IMG|VIDEO|CANVAS|TEXTAREA|INPUT|BUTTON)$/.test(el.tagName)) return false;
+  for (const n of el.childNodes) if (n.nodeType === Node.TEXT_NODE && n.textContent?.trim()) return false;
+  const cs = getComputedStyle(el);
+  const clear = (c: string) => c === 'transparent' || /rgba\(.*,\s*0\)$/.test(c);
+  if (!clear(cs.backgroundColor) || cs.backgroundImage !== 'none') return false;
+  if (cs.boxShadow !== 'none') return false;
+  if (['Top', 'Right', 'Bottom', 'Left'].some((d) => parseFloat(cs.getPropertyValue(`border-${d.toLowerCase()}-width`)) > 0 && !clear(cs.getPropertyValue(`border-${d.toLowerCase()}-color`)))) return false;
+  return true;
+};
+
+/** 押した位置で、実際に見えているものを描いている要素の ID（見つからなければ null） */
+const ownerAt = (x: number, y: number) => {
+  for (const el of document.elementsFromPoint(x, y)) {
+    if (el.closest('[data-edit-ui],[data-edit-frame]')) continue;
+    const host = el.closest('[data-edit-id]');
+    if (!host) continue;
+    if (isHollow(el)) continue;
+    return host.getAttribute('data-edit-id');
+  }
+  return null;
+};
+
 const sameBox = (a: Box | null, b: Box | null) =>
   a === b || (a && b && Math.abs(a.x - b.x) < 0.5 && Math.abs(a.y - b.y) < 0.5 && Math.abs(a.w - b.w) < 0.5 && Math.abs(a.h - b.h) < 0.5);
 
@@ -123,6 +155,18 @@ export const Editable: React.FC<{
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [needsPivot]);
 
+  // 重なった別の要素から押した操作を受け取れるようにする（最新の処理を登録）
+  const pressRef = useRef<(e: Press) => void>(() => {});
+  useEffect(() => {
+    if (!active) return;
+    const key = pressKey(scene.id, id);
+    const fn = (e: Press) => pressRef.current(e);
+    pressHandlers.set(key, fn);
+    return () => {
+      if (pressHandlers.get(key) === fn) pressHandlers.delete(key);
+    };
+  }, [active, scene.id, id]);
+
   if (adj.hidden) return null;
 
   const transform = adjustTransform(adj);
@@ -142,7 +186,7 @@ export const Editable: React.FC<{
   };
 
   /** ドラッグ系の共通処理 */
-  const gesture = (e: React.PointerEvent, onMove: (ev: PointerEvent) => void) => {
+  const gesture = (e: Press, onMove: (ev: PointerEvent) => void) => {
     if (!edit) return;
     e.stopPropagation();
     e.preventDefault();
@@ -174,14 +218,31 @@ export const Editable: React.FC<{
     return { x: rc.left + rc.width / 2, y: rc.top + rc.height / 2 };
   };
 
-  const onBodyDown = (e: React.PointerEvent) => {
+  const onBodyDown = (e: Press, grab = false) => {
     if (!active || !edit || draft !== null) return;
     if ((e.target as Element).closest('[data-edit-ui]')) return;
+    // 透明な入れ物の上を押した時は、その下で実際に見えている要素の操作にする（見えている要素を動かす）
+    if (!grab) {
+      const owner = ownerAt(e.clientX, e.clientY);
+      const other = owner && owner !== id ? pressHandlers.get(pressKey(scene.id, owner)) : undefined;
+      if (other) return other(e);
+    }
+    // ほかの要素を選んでいる間は、触った要素は動かさない（選び直すだけ。動かすのは選んでからのドラッグ）。
+    // 選んでいる要素の枠の中は、上に別の要素が重なっていても、最前面の「つかむ面」で選んでいる要素を動かす
+    if (edit.selectedId && !selected) {
+      e.stopPropagation();
+      e.preventDefault();
+      edit.pause();
+      edit.select(id);
+      return;
+    }
     const sx = e.clientX;
     const sy = e.clientY;
     const base = adj;
     gesture(e, (ev) => put({ ...base, dx: base.dx + (ev.clientX - sx) / cs, dy: base.dy + (ev.clientY - sy) / cs }, true));
   };
+
+  pressRef.current = onBodyDown;
 
   const onScaleDown = (e: React.PointerEvent) => {
     const c = pivotScreen();
@@ -243,7 +304,24 @@ export const Editable: React.FC<{
     return (
       <div data-edit-frame style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
         <svg width={ow} height={oh} style={{ position: 'absolute', inset: 0, overflow: 'visible', pointerEvents: 'none' }}>
-          <polygon points={corners.map((c) => `${c.x},${c.y}`).join(' ')} fill="none" stroke={ACCENT} strokeWidth={2} />
+          {/* 選んでいる要素をつかむ面。重なっている手前の要素より前にあるので、枠の中のドラッグは必ず選んでいる要素を動かす */}
+          <polygon
+            data-edit-grab
+            points={corners.map((c) => `${c.x},${c.y}`).join(' ')}
+            fill="transparent"
+            stroke={ACCENT}
+            strokeWidth={2}
+            style={{ pointerEvents: 'all', cursor: 'move', touchAction: 'none' }}
+            onPointerDown={(e) => onBodyDown(e, true)}
+            onDoubleClick={
+              text
+                ? (e) => {
+                    e.stopPropagation();
+                    beginEdit();
+                  }
+                : undefined
+            }
+          />
           <line x1={tc.x} y1={tc.y} x2={rot.x} y2={rot.y} stroke={ACCENT} strokeWidth={2} />
         </svg>
         {draft === null ? (

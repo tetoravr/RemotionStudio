@@ -1,7 +1,8 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { isAudioStale, narrationHash, plainSpeechText, voiceFor } from '../video/narrationKey';
-import type { Project } from '../video/schema';
+import type { Line, Project } from '../video/schema';
 import { api, waitJob } from './api';
+import { withBase } from './base';
 import type { Update } from './pages/Editor';
 
 /**
@@ -21,10 +22,44 @@ export type VoiceState = {
   progress: { done: number; total: number; message: string } | null;
   auto: boolean;
   ready: boolean;
-  /** 作る。'stale' は古いセリフ全部。force は最新でも作り直す。でき上がって取り込むまで待つ */
-  request: (ids: string[] | 'stale', opts?: { force?: boolean }) => Promise<void>;
-  /** 今の音声（作り直した直後に聴く用） */
-  audioOf: (lineId: string) => string | null;
+  /**
+   * 開いてから内容を変えたのに、音声がまだ古いセリフ。プレビューでは鳴らさない（変える前の言葉が聞こえないように）
+   */
+  outdated: Set<string>;
+  /** 作る。'stale' は古いセリフ全部。でき上がって取り込むまで待ち、新しくできた音声（id → src）を返す */
+  request: (ids: string[] | 'stale', opts?: { force?: boolean }) => Promise<Record<string, string>>;
+  /** セリフの音声を1つ聴く（ほかの試聴と動画の再生は止める） */
+  preview: (src: string, onEnd?: (finished: boolean) => void) => void;
+};
+
+/* ---------------- 試聴（セリフの音声を1つずつ聴く）。画面のどこから鳴らしても、同時には1つだけ ---------------- */
+
+let previewEl: HTMLAudioElement | null = null;
+let previewToken = 0;
+export const stopPreview = () => {
+  previewToken++;
+  previewEl?.pause();
+  previewEl = null;
+};
+/** projectId の音声ファイルを鳴らす。終わる・止められる・読めない時に onEnd（最後まで鳴った時だけ finished=true） */
+export const playPreview = (projectId: string, src: string, onEnd?: (finished: boolean) => void) => {
+  stopPreview();
+  const me = previewToken;
+  // ファイル名は作るたびに変わる。念のため、ブラウザに残った前の音声を使わないようにする
+  const a = new Audio(withBase(`/files/${projectId}/${src}?v=${encodeURIComponent(src)}`));
+  previewEl = a;
+  let ended = false;
+  const done = (finished: boolean) => {
+    if (ended) return;
+    ended = true;
+    if (previewToken === me) previewEl = null;
+    onEnd?.(finished);
+  };
+  a.onended = () => done(true);
+  a.onerror = () => done(false);
+  // 別の試聴を始めた・止めた時（最後まで鳴った時も ended より先に pause が来るので、ended で見分ける）
+  a.onpause = () => done(a.ended);
+  a.play().catch(() => done(false));
 };
 
 export const VoiceContext = createContext<VoiceState | null>(null);
@@ -40,6 +75,7 @@ export const useVoiceUpdater = ({
   flush,
   update,
   projectRef,
+  pauseVideo,
 }: {
   project: Project | null;
   engine: string;
@@ -47,12 +83,13 @@ export const useVoiceUpdater = ({
   flush: () => Promise<void>;
   update: Update;
   projectRef: React.RefObject<Project | null>;
+  pauseVideo: () => void;
 }): VoiceState => {
   const [running, setRunning] = useState<Set<string>>(new Set());
   const [progress, setProgress] = useState<VoiceState['progress']>(null);
   const [failed, setFailed] = useState<Record<string, { hash: string; message: string }>>({});
   const busy = useRef(false);
-  const queue = useRef<{ ids: string[] | 'stale'; done: () => void }[]>([]);
+  const queue = useRef<{ ids: string[] | 'stale'; done: (made: Record<string, string>) => void }[]>([]);
   const engineRef = useRef(engine);
   engineRef.current = engine;
 
@@ -77,35 +114,61 @@ export const useVoiceUpdater = ({
   if (project && ready && baseline.current?.id !== project.id) {
     baseline.current = { id: project.id, hashes: new Map([...stale].map((id) => [id, hashOf(project, id)])) };
   }
+  // 開いてから変えたセリフ（開いた時点で古かったものは除く）
+  const outdated = useMemo(() => {
+    const out = new Set<string>();
+    if (!ready || !project) return out;
+    const base = baseline.current?.hashes;
+    for (const id of stale) if (base?.get(id) !== hashOf(project, id)) out.add(id);
+    return out;
+  }, [ready, project, stale, hashOf]);
   const waiting = useMemo(() => {
     const out = new Set<string>();
-    if (!auto || !ready || !project) return out;
-    const base = baseline.current?.hashes;
-    for (const id of stale) if (!running.has(id) && !isFailed(id) && base?.get(id) !== hashOf(project, id)) out.add(id);
+    if (!auto) return out;
+    for (const id of outdated) if (!running.has(id) && !isFailed(id)) out.add(id);
     return out;
-  }, [auto, ready, project, stale, running, isFailed, hashOf]);
+  }, [auto, outdated, running, isFailed]);
 
-  /** サーバーで作った音声のうち、今の内容と合うものだけを取り込む（作っている間に変えたセリフは、また古い扱いのまま） */
+  /**
+   * でき上がった音声を取り込む。
+   * 作ったジョブの結果（made）をそのまま使う。保存されたプロジェクトを読み直すと、その間に画面から保存した古い内容で
+   * 上書きされていて、前の音声に戻ってしまうことがあるため（結果が無い失敗時だけ読み直す）。
+   * 作っている間に内容を変えたセリフは取り込まない（また古い扱いのまま）
+   */
   const merge = useCallback(
-    async (ids: string[], snapshot: Map<string, string>) => {
+    async (ids: string[], snapshot: Map<string, string>, made: Record<string, Line['audio']> | null) => {
       const p = projectRef.current;
-      if (!p) return [] as string[];
-      const fresh = await api.get(p.id);
-      const byId = new Map(fresh.scenes.flatMap((s) => s.lines).map((l) => [l.id, l.audio] as const));
-      const got: string[] = [];
+      if (!p) return {} as Record<string, string>;
+      const byId = new Map<string, NonNullable<Line['audio']>>();
+      if (made) {
+        for (const [id, a] of Object.entries(made)) if (a) byId.set(id, a);
+      } else {
+        const fresh = await api.get(p.id);
+        for (const l of fresh.scenes.flatMap((s) => s.lines)) if (l.audio) byId.set(l.id, l.audio);
+      }
+      /** 取り込む音声（頼んだセリフは、頼んだ時から内容が変わっていなければ、今の内容の音声として） */
+      const pick = (draft: Project) => {
+        const out = new Map<string, NonNullable<Line['audio']>>();
+        for (const l of draft.scenes.flatMap((s) => s.lines)) {
+          const a = byId.get(l.id);
+          if (!a) continue;
+          const now = narrationHash(l, voiceFor(l.speaker, draft.cast), engineRef.current);
+          if (ids.includes(l.id)) {
+            if (snapshot.get(l.id) === now) out.set(l.id, { ...a, hash: now });
+          } else if (a.hash === now) out.set(l.id, a);
+        }
+        return out;
+      };
+      // 結果は、画面の最新の内容で先に決める（update の中は後で実行されるので、そこでは結果を返せない）
+      const got: Record<string, string> = {};
+      for (const [id, a] of pick(projectRef.current ?? p)) if (ids.includes(id)) got[id] = a.src;
       update(
         (draft) => {
+          const take = pick(draft);
           for (const s of draft.scenes)
             for (const l of s.lines) {
-              const a = byId.get(l.id);
-              if (!a || (l.audio && l.audio.src === a.src)) continue;
-              const now = narrationHash(l, voiceFor(l.speaker, draft.cast), engineRef.current);
-              if (ids.includes(l.id)) {
-                // 頼んだセリフは、頼んだ時から内容が変わっていなければ取り込む（今の内容の音声として）
-                if (snapshot.get(l.id) !== now) continue;
-                l.audio = { ...a, hash: now };
-                got.push(l.id);
-              } else if (a.hash === now) l.audio = a;
+              const a = take.get(l.id);
+              if (a && l.audio?.src !== a.src) l.audio = a;
             }
         },
         { silent: true },
@@ -120,16 +183,17 @@ export const useVoiceUpdater = ({
       // 直前の入力（ボタンを押す直前の書き換え）が画面のデータに入るのを待つ
       await new Promise((r) => setTimeout(r, 60));
       const p = projectRef.current;
-      if (!p) return;
+      if (!p) return {};
       const list =
         ids === 'stale'
           ? p.scenes.flatMap((s) => s.lines).filter((l) => plainSpeechText(l).trim() && isAudioStale(l, p.cast, engineRef.current)).map((l) => l.id)
           : ids;
-      if (!list.length) return;
+      if (!list.length) return {};
       setRunning(new Set(list));
       setProgress({ done: 0, total: list.length, message: '' });
       let error: string | null = null;
       let snapshot = new Map<string, string>();
+      let made: Record<string, Line['audio']> | null = null;
       try {
         // 画面の編集を先に保存してから作る（サーバーは保存された内容で作る）
         await flush();
@@ -153,16 +217,20 @@ export const useVoiceUpdater = ({
           jobId = body.jobId;
         }
         if (!jobId) throw new Error('ほかの音声づくりが終わりませんでした');
-        await waitJob(jobId, (j) => setProgress({ done: Math.round(j.progress * list.length), total: list.length, message: j.message }));
+        const job = await waitJob(jobId, (j) => setProgress({ done: Math.round(j.progress * list.length), total: list.length, message: j.message }));
+        const r = job.result as { audio?: Record<string, Line['audio']>; error?: string } | undefined;
+        made = r?.audio ?? null;
+        // 一部だけ作れなかった時は、作れた分を取り込んで、残りを失敗として出す
+        if (r?.error) error = r.error;
       } catch (e) {
         error = (e as Error).message;
       }
-      const got = await merge(list, snapshot).catch(() => [] as string[]);
+      const got = await merge(list, snapshot, made).catch(() => ({}) as Record<string, string>);
       const now = projectRef.current;
       setFailed((cur) => {
         const next = { ...cur };
         for (const id of list) {
-          if (got.includes(id)) delete next[id];
+          if (got[id]) delete next[id];
           // 失敗した時だけ記録する（作っている間に書き換えたセリフは、次にまた作る）
           else if (error && now && hashOf(now, id) === snapshot.get(id)) next[id] = { hash: snapshot.get(id)!, message: error };
         }
@@ -170,6 +238,7 @@ export const useVoiceUpdater = ({
       });
       setRunning(new Set());
       setProgress(null);
+      return got;
     },
     [projectRef, flush, merge, hashOf],
   );
@@ -181,8 +250,7 @@ export const useVoiceUpdater = ({
     try {
       while (queue.current.length) {
         const job = queue.current.shift()!;
-        await runOne(job.ids);
-        job.done();
+        job.done(await runOne(job.ids).catch(() => ({})));
       }
     } finally {
       busy.current = false;
@@ -190,8 +258,8 @@ export const useVoiceUpdater = ({
   }, [runOne]);
 
   const request = useCallback(
-    (ids: string[] | 'stale', opts: { force?: boolean } = {}) =>
-      new Promise<void>((done) => {
+    (ids: string[] | 'stale', _opts: { force?: boolean } = {}) =>
+      new Promise<Record<string, string>>((done) => {
         if (Array.isArray(ids)) setFailed((cur) => Object.fromEntries(Object.entries(cur).filter(([k]) => !ids.includes(k))));
         else setFailed({});
         queue.current.push({ ids, done });
@@ -208,12 +276,18 @@ export const useVoiceUpdater = ({
     return () => clearTimeout(t);
   }, [waitingKey, running.size, request]);
 
-  const audioOf = useCallback(
-    (lineId: string) => projectRef.current?.scenes.flatMap((s) => s.lines).find((l) => l.id === lineId)?.audio?.src ?? null,
-    [projectRef],
+  const preview = useCallback(
+    (src: string, onEnd?: (finished: boolean) => void) => {
+      const p = projectRef.current;
+      if (!p) return;
+      pauseVideo();
+      playPreview(p.id, src, onEnd);
+    },
+    [projectRef, pauseVideo],
   );
 
   const errors = useMemo(() => Object.fromEntries(Object.entries(failed).filter(([id]) => isFailed(id)).map(([id, f]) => [id, f.message])), [failed, isFailed]);
 
-  return { running, waiting, errors, stale, progress, auto, ready, request, audioOf };
+  return { running, waiting, errors, stale, outdated, progress, auto, ready, request, preview };
 };
+

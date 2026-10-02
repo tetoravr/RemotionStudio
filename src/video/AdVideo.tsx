@@ -81,10 +81,10 @@ export const AdVideo: React.FC<AdVideoProps> = (props) => {
       </AbsoluteFill>
     );
   }
-  return <AdVideoInner project={parsed.data} assetBaseUrl={props.assetBaseUrl ?? ''} />;
+  return <AdVideoInner project={parsed.data} assetBaseUrl={props.assetBaseUrl ?? ''} mutedLines={props.mutedLines} />;
 };
 
-const AdVideoInner: React.FC<{ project: Project; assetBaseUrl: string }> = ({ project: raw, assetBaseUrl }) => {
+const AdVideoInner: React.FC<{ project: Project; assetBaseUrl: string; mutedLines?: string[] }> = ({ project: raw, assetBaseUrl, mutedLines }) => {
   const project = useMemo(() => adaptForFormat(raw), [raw]);
   useProjectFonts(project);
   const timeline = useMemo(() => computeTimeline(project), [project]);
@@ -141,7 +141,7 @@ const AdVideoInner: React.FC<{ project: Project; assetBaseUrl: string }> = ({ pr
             </Sequence>
           ) : null,
         )}
-        <AudioTrack timeline={timeline} />
+        <AudioTrack timeline={timeline} mutedLines={mutedLines} />
       </AbsoluteFill>
     </ThemeProvider>
   );

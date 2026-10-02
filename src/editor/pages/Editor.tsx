@@ -16,7 +16,8 @@ import { AudioPanel } from '../components/AudioPanel';
 import { BrandPanel } from '../components/BrandPanel';
 import { CastPanel } from '../components/CastPanel';
 import { LayerPanel } from '../components/LayerPanel';
-import { useVoiceUpdater, VoiceContext } from '../voice';
+import { stopPreview, useVoiceUpdater, VoiceContext } from '../voice';
+import { carryAudio } from '../../video/narrationKey';
 import { LinesPanel } from '../components/LinesPanel';
 import { confirmDialog } from '../components/Dialogs';
 import { Progress, Seg, Sheet } from '../components/Fields';
@@ -161,19 +162,26 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
     [schedule],
   );
 
+  // 元に戻しても、作り直した音声は前の音声に戻さない（内容に合う音声を引き継ぐ）
+  const engineRef = useRef('');
+  const withAudio = (p: Project) => carryAudio(p, [project!, ...history.current.past, ...history.current.future], engineRef.current);
   const undo = useCallback(() => {
-    const prev = history.current.past.pop();
-    if (!prev || !project) return;
+    const popped = history.current.past.pop();
+    if (!popped || !project) return;
+    const prev = withAudio(popped);
     history.current.future.push(project);
     setProject(prev);
     schedule(prev);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project, schedule]);
   const redo = useCallback(() => {
-    const next = history.current.future.pop();
-    if (!next || !project) return;
+    const popped = history.current.future.pop();
+    if (!popped || !project) return;
+    const next = withAudio(popped);
     history.current.past.push(project);
     setProject(next);
     schedule(next);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project, schedule]);
 
   useEffect(() => {
@@ -279,6 +287,8 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
     const onPlay = () => {
       setPlaying(true);
       setSelectedEl(null);
+      // セリフの試聴と重ならないように
+      stopPreview();
     };
     const onPause = () => setPlaying(false);
     const onMute = (e: { detail: { isMuted: boolean } }) => setMuted(e.detail.isMuted);
@@ -299,8 +309,10 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
   }, [project?.id, size.w > 0]);
 
   const tts = ttsFor(meta, project?.audio);
+  engineRef.current = tts.engine;
+  const pauseVideo = useCallback(() => playerRef.current?.pause(), []);
   // セリフの音声を裏で作り直す（自動・手動とも）
-  const voice = useVoiceUpdater({ project, engine: tts.engine, ready: tts.ready, flush, update, projectRef });
+  const voice = useVoiceUpdater({ project, engine: tts.engine, ready: tts.ready, flush, update, projectRef, pauseVideo });
   const staleByScene = useMemo(
     () => (project ? project.scenes.map((s) => s.lines.filter((l) => isAudioStale(l, project.cast, tts.engine)).length) : []),
     [project, tts.engine],
@@ -318,7 +330,12 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
     [project],
   );
 
-  const inputProps = useMemo(() => (project ? { project, assetBaseUrl: withBase(`/files/${project.id}/`) } : null), [project]);
+  // 開いてから内容を変えて、まだ作り直していないセリフは、プレビューで前の音声を鳴らさない
+  const mutedKey = [...voice.outdated].sort().join(',');
+  const inputProps = useMemo(
+    () => (project ? { project, assetBaseUrl: withBase(`/files/${project.id}/`), mutedLines: mutedKey ? mutedKey.split(',') : [] } : null),
+    [project, mutedKey],
+  );
 
   const curIdx = project && timeline ? timeline.scenes.findIndex((st) => frame >= st.start && frame < st.start + st.duration) : -1;
   const activeSceneId = editing && project && curIdx >= 0 ? project.scenes[curIdx]?.id ?? null : null;

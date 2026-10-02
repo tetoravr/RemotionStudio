@@ -76,13 +76,13 @@ export const generateNarration = async (
 
 /**
  * 使われなくなった音声ファイルを削除。
- * 作ったばかりのファイルは残す（エディターが別の作成の結果をまだ保存していない間に消さないように）
+ * 1日以内のファイルは残す（エディターがまだ保存していない作成の結果や、「元に戻す」で戻した前の音声が消えないように）
  */
 const cleanupAudio = async (project: Project, projectDir: string) => {
   const used = new Set(project.scenes.flatMap((s) => s.lines.map((l) => l.audio?.src).filter(Boolean)));
   const dir = path.join(projectDir, 'audio');
   const files = await fs.readdir(dir).catch(() => [] as string[]);
-  const keepAfter = Date.now() - 30 * 60_000;
+  const keepAfter = Date.now() - 24 * 60 * 60_000;
   await Promise.all(
     files
       .filter((f) => !used.has(`audio/${f}`))

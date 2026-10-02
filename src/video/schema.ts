@@ -348,5 +348,7 @@ export const AdVideoProps = z.object({
   project: Project,
   /** プロジェクト assets を解決するベースURL（末尾 / 付き）。空なら staticFile 相対 */
   assetBaseUrl: z.string().default(''),
+  /** 音声を鳴らさないセリフ（エディターのプレビューで、内容を変えて音声がまだ古いセリフ） */
+  mutedLines: z.array(z.string()).optional(),
 });
 export type AdVideoProps = z.infer<typeof AdVideoProps>;

@@ -1,4 +1,4 @@
-import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, Ellipsis, Play, Plus, RefreshCw, Trash2, TriangleAlert } from 'lucide-react';
+import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, Ellipsis, History, Play, Plus, RefreshCw, Square, Trash2, TriangleAlert } from 'lucide-react';
 import React, { useContext, useEffect, useRef, useState } from 'react';
 import { normalizeAdjust, readAdjust, sceneLayout, setSceneLayout } from '../../video/edit/textEdit';
 import { isAudioStale } from '../../video/narrationKey';
@@ -6,13 +6,12 @@ import type { Line, Project } from '../../video/schema';
 import type { SceneTiming } from '../../video/timeline';
 import { ttsFor } from '../api';
 import { MetaContext } from '../App';
-import { useVoice } from '../voice';
+import { stopPreview, useVoice } from '../voice';
 import { Ic } from '../icons';
 import type { RunJob, Update } from '../pages/Editor';
 import { SCENE_META } from '../sceneMeta';
 import { Field, MenuItem, Popover, Seg, Text } from './Fields';
 import { EmojiPicker, POSE_LABELS, PosePicker, SpeakerPicker, TagPicker } from './pickers';
-import { withBase } from '../base';
 
 const STYLE_LABELS: Record<Line['style'], string> = { bubble: '吹き出し', 'bubble-accent': '強調', caption: '字幕', none: '声のみ' };
 const rid = () => Math.random().toString(36).slice(2, 8);
@@ -32,12 +31,14 @@ export const LinesPanel: React.FC<{
   onSeek: (sceneFrame: number) => void;
 }> = ({ project, index, timing, localFrame, update, runJob, onSeek }) => {
   const scene = project.scenes[index];
-  const audioRef = useRef<HTMLAudioElement | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
-  const play = (src: string) => {
-    audioRef.current?.pause();
-    audioRef.current = new Audio(withBase(`/files/${project.id}/${src}?t=${Date.now()}`));
-    audioRef.current.play();
+  const voice = useVoice();
+  /** いま試聴しているセリフ（ボタンを「停止」にする） */
+  const [hearing, setHearing] = useState<string | null>(null);
+  const play = (lineId: string, src: string) => {
+    if (!voice) return;
+    setHearing(lineId);
+    voice.preview(src, () => setHearing((cur) => (cur === lineId ? null : cur)));
   };
   const activeId = timing?.lines.find((lt) => localFrame >= lt.start && localFrame < lt.end)?.line.id ?? null;
 
@@ -72,6 +73,7 @@ export const LinesPanel: React.FC<{
                 update={update}
                 runJob={runJob}
                 play={play}
+                hearing={hearing === l.id}
                 onSeek={onSeek}
               />
             ))}
@@ -105,9 +107,11 @@ const LineCard: React.FC<{
   active: boolean;
   update: Update;
   runJob: RunJob;
-  play: (src: string) => void;
+  play: (lineId: string, src: string) => void;
+  /** このセリフを試聴中 */
+  hearing: boolean;
   onSeek: (sceneFrame: number) => void;
-}> = ({ project, index, li, line: l, timing, active, update, runJob, play, onSeek }) => {
+}> = ({ project, index, li, line: l, timing, active, update, runJob, play, hearing, onSeek }) => {
   const meta = useContext(MetaContext)!;
   // 詳細は最初から開いておく（閉じることもできる）
   const [open, setOpen] = useState(true);
@@ -119,12 +123,18 @@ const LineCard: React.FC<{
   const isCast = project.cast.some((c) => c.id === l.speaker);
   const bubble = l.style === 'bubble' || l.style === 'bubble-accent';
   const voice = useVoice();
-  /** このセリフの音声を作り直して、すぐ聴く（最新の音声でも作り直す） */
+  const busy = Boolean(voice?.running.has(l.id));
+  /** このセリフの音声を今の内容で作り直して、でき上がった音声をすぐ聴く（作っている間に内容を変えた時は聴かない） */
   const redo = async () => {
     if (!voice) return;
-    await voice.request([l.id], { force: !stale });
-    const src = voice.audioOf(l.id);
-    if (src) play(src);
+    const made = await voice.request([l.id], { force: true });
+    if (made[l.id]) play(l.id, made[l.id]);
+  };
+  /** 再生ボタン。内容を変えて音声が古い時は、前の音声ではなく、作り直してから聴く */
+  const listen = () => {
+    if (hearing) return stopPreview();
+    if (stale && voice?.ready && tts.ready) return void redo();
+    if (l.audio) play(l.id, l.audio.src);
   };
   const move = (d: number) =>
     update((p) => {
@@ -154,9 +164,18 @@ const LineCard: React.FC<{
         <SpeakerPicker project={project} value={l.speaker} onChange={(v) => setLine({ speaker: v })} />
         <Text bare multiline rows={1} value={l.text} onChange={(v) => setLine({ text: v })} placeholder="セリフを入力" />
         <div className="line-tools">
-          {narration && l.audio ? (
-            <button className="icon-btn sm" onClick={() => play(l.audio!.src)} title={stale ? '前の音声を再生（今の内容とは違います）' : '音声を再生'}>
-              <Ic n={Play} size={13} mr={0} />
+          {narration && (l.audio || stale) ? (
+            <button
+              className={`icon-btn sm ${stale && !busy ? 'stale' : ''}`}
+              onClick={listen}
+              disabled={busy || (!l.audio && !(voice?.ready && tts.ready))}
+              title={hearing ? '停止' : busy ? '音声を作成中' : stale ? '今のセリフで音声を作って聴く' : '音声を聴く'}
+            >
+              {busy ? (
+                <span className="spinner" style={{ width: 12, height: 12, borderWidth: 1.5 }} />
+              ) : (
+                <Ic n={hearing ? Square : stale ? RefreshCw : Play} size={13} mr={0} />
+              )}
             </button>
           ) : null}
           <Popover
@@ -170,8 +189,13 @@ const LineCard: React.FC<{
             {(close) => (
               <>
                 {narration ? (
-                  <MenuItem icon={RefreshCw} disabled={!tts.ready || !(l.text.trim() || l.speak?.trim())} onClick={() => (close(), redo())}>
+                  <MenuItem icon={RefreshCw} disabled={!tts.ready || busy || !(l.text.trim() || l.speak?.trim())} onClick={() => (close(), redo())}>
                     {l.audio ? '音声を作り直して聴く' : '音声を作って聴く'}
+                  </MenuItem>
+                ) : null}
+                {narration && stale && l.audio ? (
+                  <MenuItem icon={History} onClick={() => (close(), play(l.id, l.audio!.src))}>
+                    前の音声を聴く
                   </MenuItem>
                 ) : null}
                 <MenuItem icon={ArrowUp} disabled={li === 0} onClick={() => (close(), move(-1))}>

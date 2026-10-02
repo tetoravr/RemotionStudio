@@ -162,6 +162,8 @@ code { font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: 0.92em
 .icon-btn:disabled { opacity: 0.35; cursor: default; background: transparent; }
 .icon-btn.sm { width: 24px; height: 24px; border-radius: 6px; }
 .icon-btn.on { color: var(--accent); }
+/* セリフを変えて音声が古い時の再生ボタン（押すと作り直して聴く） */
+.icon-btn.stale { color: var(--accent); }
 .icon-btn.round { border-radius: 50%; }
 
 /* ---------- 入力 ---------- */
@@ -758,6 +760,8 @@ video.result { width: 100%; max-height: 52vh; background: #000; border-radius: 1
 /* 操作ハンドルは映像の外（最前面のオーバーレイ）に描く。枠は素通し、ボタンだけ押せる */
 [data-edit-canvas='on'] [data-edit-overlay] [data-edit-frame] { pointer-events: none !important; }
 [data-edit-canvas='on'] [data-edit-overlay] [data-edit-ui] { pointer-events: auto !important; }
+/* 選んでいる要素をつかむ面（枠の中）。手前に重なった別の要素ではなく、選んでいる要素を動かす */
+[data-edit-canvas='on'] [data-edit-overlay] [data-edit-grab] { pointer-events: all !important; }
 
 /* 触れられる要素は、マウスを乗せた時だけ細い枠を出す（常に枠が出ていると映像が見づらい） */
 [data-edit-hover-frame] { opacity: 0; transition: opacity 0.12s; }

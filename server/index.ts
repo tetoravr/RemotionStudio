@@ -333,7 +333,8 @@ app.post(
     const job = startJob('narration', id, async (ctx) => {
       const project = await loadProject(id);
       const todo = staleLines(project, force, only).length;
-      if (!todo) return { generated: 0 };
+      if (!todo) return { generated: 0, audio: {} };
+      const before = new Map(project.scenes.flatMap((s) => s.lines.map((l) => [l.id, l.audio?.src] as const)));
       // 一部のセリフが失敗しても（文字数の上限など）、できた分の音声は残す（作り直しでクレジットを無駄にしない）
       let failure: unknown = null;
       try {
@@ -350,8 +351,12 @@ app.post(
       const audio = new Map(project.scenes.flatMap((s) => s.lines.map((l) => [l.id, l.audio] as const)));
       for (const s of latest.scenes) for (const l of s.lines) if (audio.get(l.id)) l.audio = audio.get(l.id);
       await saveProject(latest);
-      if (failure) throw failure;
-      return { generated: todo };
+      // 今回作った音声を結果で返す。エディターは保存されたプロジェクトを読み直さず、これをそのまま取り込む
+      // （読み直すと、その間にエディターが保存した前の音声に戻っていることがあるため）
+      const made: Record<string, unknown> = {};
+      for (const s of project.scenes) for (const l of s.lines) if (l.audio && l.audio.src !== before.get(l.id)) made[l.id] = l.audio;
+      if (failure && !Object.keys(made).length) throw failure;
+      return { generated: Object.keys(made).length, audio: made, ...(failure ? { error: (failure as Error).message } : {}) };
     });
     res.json({ jobId: job.id });
   }),
