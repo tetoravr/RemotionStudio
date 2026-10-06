@@ -1,6 +1,6 @@
 {
   "name": "remotion-ad-studio",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "description": "AI-assisted product ad video maker built on Remotion (vertical SNS ads / 16:9 / 1:1)",
   "type": "module",
@@ -9,6 +9,7 @@
     "dev:server": "tsx watch --clear-screen=false server/index.ts",
     "dev:editor": "vite",
     "build": "vite build",
+    "bundle:video": "remotion bundle src/video/index.ts --out-dir dist-remotion",
     "start": "vite build && tsx server/index.ts",
     "studio": "remotion studio src/video/index.ts",
     "make": "tsx scripts/cli.ts make",

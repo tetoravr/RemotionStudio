@@ -16,8 +16,8 @@ COPY . .
 # 公開するパス（例: /video-creator）。エディターはこの値でビルドする（Render は環境変数をビルド引数として渡す）
 ARG BASE_PATH=
 ENV BASE_PATH=${BASE_PATH}
-# エディターを本番用にビルドし、書き出し用の Chromium を先に入れておく
-RUN npm run build && npx remotion browser ensure
+# エディターを本番用にビルドし、書き出し用の動画のバンドルと Chromium も先に用意しておく（最初の書き出しを待たせない）
+RUN npm run build && npm run bundle:video && npx remotion browser ensure
 
 ENV NODE_ENV=production \
     HOST=0.0.0.0 \

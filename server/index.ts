@@ -25,7 +25,7 @@ import {
   deleteProject, duplicateProject, emptyTrash, listProjects, loadProject, newProjectId, projectDir, saveAsset, saveProject, seedSamples, updateProject,
   withProjectLock,
 } from './projects';
-import { renderProject, withFileServer } from './render';
+import { renderProject, warmUpRenderer, withFileServer } from './render';
 import { authEnabled, authProblems, authRouter, currentUser, requireLogin } from './auth';
 
 const app = express();
@@ -675,9 +675,10 @@ app.post(
       res.status(400).json({ error: `シーン${missing.join('・')}（画面紹介）に実際のスクリーンショットが設定されていません。画像を設定するか、シーンを削除してください。` });
       return;
     }
+    const draft = req.body?.draft === true;
     const job = startJob('render', id, async (ctx) => {
       const project = await loadProject(id);
-      return withFileServer((serverUrl) => renderProject({ project, serverUrl, onProgress: (p, m) => ctx.progress(p, m) }));
+      return withFileServer((serverUrl) => renderProject({ project, serverUrl, draft, onProgress: (p, m) => ctx.progress(p, m) }));
     });
     res.json({ jobId: job.id });
   }),
@@ -744,6 +745,8 @@ await seedSamples();
 await emptyTrash();
 cleanStaging();
 root.listen(config.port, config.host, async () => {
+  // 最初の書き出しを待たせないよう、描画の準備（ブラウザ・バンドル）を裏で済ませておく（本番だけ。開発中は書き換えるたびに作り直すので）
+  if (process.env.NODE_ENV === 'production') void warmUpRenderer().catch((e) => console.warn(`  ⚠ 書き出しの準備に失敗しました（書き出す時にもう一度試します）: ${(e as Error).message}`));
   console.log(`\n  Video Creator server: http://localhost:${config.port}${config.basePath}/`);
   console.log(`  ログイン: ${authEnabled() ? `Google（${[...(process.env.AUTH_ALLOWED_DOMAINS ?? '').split(','), ...(process.env.AUTH_ALLOWED_EMAILS ?? '').split(',')].filter(Boolean).join(', ')}）` : 'なし（このPCだけで使う設定）'}`);
   console.log(`  OpenAI: ${hasOpenAI() ? `有効 (${config.models.text} / ${config.models.tts} / ${config.models.image})` : '未設定（.env に OPENAI_API_KEY を設定すると AI 機能が使えます）'}`);

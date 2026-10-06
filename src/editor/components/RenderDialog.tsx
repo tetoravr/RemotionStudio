@@ -6,7 +6,7 @@ import { api, ttsFor, waitJob, type Job } from '../api';
 import { MetaContext } from '../App';
 import { Ic } from '../icons';
 import { useVoice } from '../voice';
-import { Progress, Sheet } from './Fields';
+import { Progress, Seg, Sheet } from './Fields';
 
 type RenderItem = { name: string; url: string; size: number; at: number };
 
@@ -18,6 +18,8 @@ export const RenderDialog: React.FC<{ project: Project; onClose: () => void; mis
   const [err, setErr] = useState<string | null>(null);
   const [result, setResult] = useState<string | null>(null);
   const [renders, setRenders] = useState<RenderItem[]>([]);
+  /** 確認用（720p で速く）か、仕上げ用（元の大きさ） */
+  const [draft, setDraft] = useState(false);
   const alive = useRef(true);
   const load = () => api.renders(project.id).then(setRenders).catch(() => undefined);
 
@@ -72,7 +74,7 @@ export const RenderDialog: React.FC<{ project: Project; onClose: () => void; mis
       setJob({ id: '', kind: 'render', status: 'running', progress: 0, message: '準備しています' });
     }
     try {
-      const { jobId } = await api.post(`/api/projects/${project.id}/render`);
+      const { jobId } = await api.post(`/api/projects/${project.id}/render`, { draft });
       await follow(jobId);
     } catch (e) {
       if (alive.current) {
@@ -85,7 +87,8 @@ export const RenderDialog: React.FC<{ project: Project; onClose: () => void; mis
   const running = job?.status === 'running';
   const f = FORMATS[project.format];
   return (
-    <Sheet wide onClose={running ? undefined : onClose}>
+    // 書き出し中も閉じられる（書き出しはサーバーで続き、開き直すと続きから表示する）。音声を作っている間だけは閉じない
+    <Sheet wide onClose={running && !job?.id ? undefined : onClose}>
       {!result ? (
         <div className="sheet-icon">
           <Ic n={Film} size={22} mr={0} />
@@ -93,8 +96,21 @@ export const RenderDialog: React.FC<{ project: Project; onClose: () => void; mis
       ) : null}
       <h3>{result ? '書き出しが完了しました' : '動画を書き出す'}</h3>
       <div className="sheet-text" style={{ marginBottom: 14 }}>
-        MP4 ・ {f.label.split('（')[0]} {f.width}×{f.height} ・ {project.fps}fps
+        MP4 ・ {f.label.split('（')[0]} {draft ? `${Math.round((f.width * 2) / 3)}×${Math.round((f.height * 2) / 3)}` : `${f.width}×${f.height}`} ・ {project.fps}fps
       </div>
+      {!result && !running ? (
+        <div style={{ marginBottom: 14 }}>
+          <Seg
+            block
+            value={draft ? 'draft' : 'final'}
+            onChange={(v) => setDraft(v === 'draft')}
+            options={[
+              { value: 'final', label: '仕上げ用（高画質）', title: '公開・納品用。元の大きさで書き出します' },
+              { value: 'draft', label: '確認用（約2倍速い）', title: '社内の確認用。720p 相当に縮めて、速く書き出します' },
+            ]}
+          />
+        </div>
+      ) : null}
 
       {!result && !running && stale.length ? (
         <div className="notice warn" style={{ marginBottom: 10 }}>
@@ -123,7 +139,14 @@ export const RenderDialog: React.FC<{ project: Project; onClose: () => void; mis
             </span>
           </div>
           <Progress value={!job?.id && voice?.progress ? voice.progress.done / Math.max(1, voice.progress.total) : job?.progress ?? 0} />
-          <div className="caption">30秒の動画で2〜4分ほどかかります。このままお待ちください。</div>
+          <div className="caption">閉じても、書き出しは続きます（もう一度「書き出す」を開くと、続きから表示されます）。</div>
+          {job?.id ? (
+            <div className="sheet-actions">
+              <button className="btn" onClick={onClose}>
+                閉じる（書き出しは続けます）
+              </button>
+            </div>
+          ) : null}
         </>
       ) : null}
       {err ? <div className="error">{err}</div> : null}
@@ -173,7 +196,9 @@ export const RenderDialog: React.FC<{ project: Project; onClose: () => void; mis
               <div key={r.name} className="cell">
                 <span className="cell-label">
                   {new Date(r.at).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
-                  <span className="sub">{(r.size / 1024 / 1024).toFixed(1)}MB</span>
+                  <span className="sub">
+                    {(r.size / 1024 / 1024).toFixed(1)}MB{r.name.endsWith('-draft.mp4') ? ' ・ 確認用' : ''}
+                  </span>
                 </span>
                 <a className="icon-btn" href={r.url} target="_blank" rel="noreferrer" title="再生">
                   <Ic n={Play} size={14} mr={0} />

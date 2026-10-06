@@ -786,3 +786,35 @@ test('保存: 同時に保存・更新しても壊れず、「読んで直して
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 });
+
+test('書き出し前の確認: 欠けているセリフの音声・画像を見つけ、文章の項目は誤って拾わない', async () => {
+  const { missingAssets, renderConcurrency } = await import('../server/render');
+  const savedDir = config.projectsDir;
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'render-check-'));
+  config.projectsDir = tmp;
+  try {
+    const p = Project.parse(structuredClone(sample));
+    fs.cpSync('public/samples/sushitop-ocr', path.join(tmp, p.id), { recursive: true });
+    assert.deepEqual(missingAssets(p), { lines: [], files: [] }, 'sample has everything');
+    // 音声が1つ消えた
+    const line = p.scenes.flatMap((s) => s.lines).find((l) => l.audio)!;
+    fs.rmSync(path.join(tmp, p.id, line.audio!.src));
+    // ロゴ画像の設定はあるのにファイルが無い。ブリーフの文章に「logo.png」と書いてあっても拾わない
+    p.brand.logo = 'assets/logo-missing.png';
+    p.brief = { ...(p.brief ?? {}), notes: '資料フォルダの brand/logo.png を参照' } as never;
+    const m = missingAssets(p);
+    assert.equal(m.lines.length, 1);
+    assert.match(m.lines[0], /^シーン\d+「/);
+    assert.deepEqual(m.files, ['assets/logo-missing.png']);
+    // 音声を使わない設定なら、セリフの音声は問わない
+    p.audio.narration = false;
+    assert.equal(missingAssets(p).lines.length, 0);
+  } finally {
+    config.projectsDir = savedDir;
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+  process.env.RENDER_CONCURRENCY = '3';
+  assert.equal(renderConcurrency(), 3);
+  delete process.env.RENDER_CONCURRENCY;
+  assert.ok(renderConcurrency() >= 1);
+});
