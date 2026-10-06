@@ -1,8 +1,8 @@
-import { ArrowRight, Check, ChevronLeft, Database, FileText, ImagePlus, Sparkles, Upload, X } from 'lucide-react';
-import React, { useContext, useEffect, useRef, useState } from 'react';
+import { ArrowRight, ChevronLeft, FileText, ImagePlus, Sparkles, Upload, X } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
 import type { Project } from '../../video/schema';
 import { api, waitJob, type Job } from '../api';
-import { go, MetaContext } from '../App';
+import { go } from '../App';
 import { Cell, Progress, Section, Seg, Sheet, Text } from '../components/Fields';
 import { Ic } from '../icons';
 
@@ -102,94 +102,7 @@ const readDraft = (): Partial<Draft> => {
   }
 };
 
-type NotionHit = { id: string; title: string; url: string; editedAt?: string; kind: 'page' | 'database' };
-
-/** 社内 Notion から資料にするページを選ぶ（連携に共有されたページだけが出る） */
-const NotionPicker: React.FC<{ onClose: () => void; onAdd: (urls: string[]) => void; already: string[] }> = ({ onClose, onAdd, already }) => {
-  const [q, setQ] = useState('');
-  const [hits, setHits] = useState<NotionHit[] | null>(null);
-  const [err, setErr] = useState<string | null>(null);
-  const [picked, setPicked] = useState<Map<string, string>>(new Map());
-  useEffect(() => {
-    let alive = true;
-    // 入力が止まってから探す（最初は最近編集されたページ）
-    const t = setTimeout(() => {
-      setErr(null);
-      api
-        .notionSearch(q.trim())
-        .then((r) => alive && setHits(r.results))
-        .catch((e) => alive && (setErr((e as Error).message), setHits([])));
-    }, q ? 300 : 0);
-    return () => {
-      alive = false;
-      clearTimeout(t);
-    };
-  }, [q]);
-  const toggle = (h: NotionHit) =>
-    setPicked((m) => {
-      const n = new Map(m);
-      if (n.has(h.id)) n.delete(h.id);
-      else n.set(h.id, h.url);
-      return n;
-    });
-  return (
-    <Sheet onClose={onClose} wide>
-      <h3>Notion から選ぶ</h3>
-      <div className="sheet-text">
-        商品・サービスの説明、事例、強みなどが書かれたページを選ぶと、その内容を読み込みます。出てくるのは、Video Creator の連携に共有されたページだけです。
-      </div>
-      <input className="input" autoFocus type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="ページ名で探す（例: サービス概要）" style={{ margin: '12px 0 10px' }} />
-      {err ? <div className="error">{err}</div> : null}
-      <div className="group notion-list">
-        {hits === null ? (
-          <div className="cell">
-            <span className="spinner" style={{ width: 14, height: 14 }} />
-            <span className="caption">探しています…</span>
-          </div>
-        ) : hits.length ? (
-          hits.map((h) => {
-            const on = picked.has(h.id);
-            const added = already.some((u) => u.replace(/-/g, '').includes(h.id.replace(/-/g, '')));
-            return (
-              <button key={h.id} type="button" className={`cell notion-hit ${on ? 'on' : ''}`} disabled={added} onClick={() => toggle(h)}>
-                <Ic n={h.kind === 'database' ? Database : FileText} size={15} mr={0} />
-                <span className="cell-label ellipsis">
-                  {h.title}
-                  {h.editedAt ? <span className="sub">{new Date(h.editedAt).toLocaleDateString('ja-JP')} 更新</span> : null}
-                </span>
-                {added ? <span className="caption">追加済み</span> : on ? <Ic n={Check} size={15} mr={0} /> : null}
-              </button>
-            );
-          })
-        ) : !err ? (
-          <div className="cell caption">
-            {q.trim() ? `「${q.trim()}」に合うページはありません。` : 'ページがありません。'}
-            Notion でページ右上の「…」→「接続」から、Video Creator の連携を追加すると出てきます。
-          </div>
-        ) : null}
-      </div>
-      <div className="sheet-actions">
-        <button className="btn" onClick={onClose}>
-          キャンセル
-        </button>
-        <button
-          className="btn primary"
-          disabled={!picked.size}
-          onClick={() => {
-            onAdd([...picked.values()]);
-            onClose();
-          }}
-        >
-          {picked.size ? `${picked.size}件を追加` : '追加'}
-        </button>
-      </div>
-    </Sheet>
-  );
-};
-
 export const NewWizard: React.FC = () => {
-  const meta = useContext(MetaContext);
-  const [picking, setPicking] = useState(false);
   const [saved] = useState(readDraft);
   const [step, setStep] = useState(saved.step ?? 0);
   const [b, setB] = useState<Brief>({ ...EMPTY, ...saved.b });
@@ -321,37 +234,13 @@ export const NewWizard: React.FC = () => {
                 手元になければ、そのまま次へ進んで入力できます。
               </p>
             </div>
-            <Section
-              title={meta?.notion ? 'Webページ・社内 Notion' : 'Webページ'}
-              right={
-                meta?.notion ? (
-                  <button type="button" className="btn sm" onClick={() => setPicking(true)}>
-                    <Ic n={FileText} size={13} mr={0} />
-                    Notion から選ぶ
-                  </button>
-                ) : null
-              }
-            >
+            <Section title="Webページ">
               <div className="group">
                 <Cell stack>
-                  <Text
-                    bare
-                    multiline
-                    rows={2}
-                    value={urls}
-                    onChange={setUrls}
-                    placeholder={meta?.notion ? 'https://example.com/service\nNotion のページの URL も読み込めます（1行に1つ）' : 'https://example.com/service\n（1行に1つ）'}
-                  />
+                  <Text bare multiline rows={2} value={urls} onChange={setUrls} placeholder={'https://example.com/service\n（1行に1つ）'} />
                 </Cell>
               </div>
             </Section>
-            {picking ? (
-              <NotionPicker
-                onClose={() => setPicking(false)}
-                already={urls.split(/\s+/).filter(Boolean)}
-                onAdd={(add) => setUrls((o) => [...o.split(/\s+/).filter(Boolean), ...add].join('\n'))}
-              />
-            ) : null}
             <Section title="資料">
               <DropZone
                 accept={DOC_ACCEPT}

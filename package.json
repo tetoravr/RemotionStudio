@@ -1,6 +1,6 @@
 {
   "name": "remotion-ad-studio",
-  "version": "0.4.0",
+  "version": "0.3.1",
   "private": true,
   "description": "AI-assisted product ad video maker built on Remotion (vertical SNS ads / 16:9 / 1:1)",
   "type": "module",

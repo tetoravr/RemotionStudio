@@ -10,7 +10,6 @@ import { STYLE_PRESETS } from './ai/images';
 import { attachScreenshots, generateStoryboard, reviseStoryboard, type Brief, type ScreenshotRef } from './ai/storyboard';
 import { resolveMedia } from './ai/media';
 import { draftBrief } from './ai/sources';
-import { notionEnabled, searchNotion } from './ai/notion';
 import { loadUiLibrary } from './ai/uiLibrary';
 import { candidateFile, createCandidate, deleteVoice, localVoiceFile, localVoices, registerVoice } from './ai/voices';
 import { engineId, irodoriStatus, OPENAI_VOICES, resolveProvider, synthesizeToFile } from './ai/tts';
@@ -64,8 +63,6 @@ app.get('/api/meta', async (req, res) => {
   res.json({
     openai: hasOpenAI(),
     portal: config.portal,
-    /** 社内 Notion を資料として読めるか（NOTION_TOKEN） */
-    notion: notionEnabled(),
     models: config.models,
     tts: {
       /** 環境設定（TTS_PROVIDER）で解決した既定のエンジン */
@@ -272,18 +269,6 @@ app.post(
       return { projectId: project.id };
     });
     res.json({ jobId: job.id });
-  }),
-);
-
-/** 社内 Notion のページを探す（連携に共有されたページだけ）。ウィザードで資料として選ぶのに使う */
-app.get(
-  '/api/notion/search',
-  h(async (req, res) => {
-    if (!notionEnabled()) {
-      res.status(400).json({ error: 'Notion の連携（NOTION_TOKEN）が設定されていません' });
-      return;
-    }
-    res.json({ results: await searchNotion(String(req.query.q ?? '')) });
   }),
 );
 
