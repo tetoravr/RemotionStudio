@@ -166,14 +166,8 @@ export const Character: React.FC<{ placement: CharacterPlacement; zIndex?: numbe
         opacity,
       }}
     >
-      <div
-        style={{
-          transform: `scale(${sx * flip}, ${sy})`,
-          transformOrigin: '50% 100%',
-          filter: `drop-shadow(0 ${10 * u}px ${14 * u}px rgba(0,0,0,0.18))`,
-        }}
-      >
-        {body}
+      <div style={{ transform: `scale(${sx * flip}, ${sy})`, transformOrigin: '50% 100%', willChange: 'transform' }}>
+        <div style={{ filter: `drop-shadow(0 ${10 * u}px ${14 * u}px rgba(0,0,0,0.18))` }}>{body}</div>
       </div>
     </div>
   );
