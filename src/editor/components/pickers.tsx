@@ -6,6 +6,7 @@ import { LIBRARY_CHARACTERS } from '../../video/library';
 import { POSES, type CastMember, type Line, type Pose, type Project } from '../../video/schema';
 import { Ic } from '../icons';
 import { Popover } from './Fields';
+import { isEnter } from '../keys';
 import { withBase } from '../base';
 
 export const POSE_LABELS: Record<string, string> = {
@@ -257,7 +258,7 @@ export const TagPicker: React.FC<{ line: Pick<Line, 'tags' | 'emoji' | 'delivery
               className="input"
               value={custom}
               onChange={(e) => setCustom(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), addCustom())}
+              onKeyDown={(e) => isEnter(e) && (e.preventDefault(), addCustom())}
               placeholder="英語で自由に（例: laughs softly）"
             />
             <button type="button" className="btn sm" disabled={!normalizeTag(custom)} onClick={addCustom}>

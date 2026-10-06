@@ -7,6 +7,7 @@ import { api, type ElevenVoice } from '../api';
 import { MetaContext } from '../App';
 import { Ic } from '../icons';
 import { Field, FilePick, Seg, Sheet, Text } from './Fields';
+import { isEnter } from '../keys';
 
 type Set = (fn: (m: CastMember) => void) => void;
 
@@ -190,7 +191,7 @@ const VoiceBrowser: React.FC<{ scope: 'library' | 'mine'; disabled: boolean; pla
             className="input"
             value={q}
             onChange={(ev) => setQ(ev.target.value)}
-            onKeyDown={(ev) => ev.key === 'Enter' && load()}
+            onKeyDown={(ev) => isEnter(ev) && load()}
             placeholder={scope === 'library' ? '例: ナレーション・明るい・アニメ' : '名前で探す'}
           />
         </div>

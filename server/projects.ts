@@ -35,11 +35,38 @@ export const saveProject = async (input: ProjectInput): Promise<Project> => {
   const project = Project.parse({ ...input, updatedAt: new Date().toISOString() });
   const dir = projectDir(project.id);
   await fs.mkdir(dir, { recursive: true });
-  const tmp = path.join(dir, `.project.${process.pid}.${Date.now()}.tmp`);
+  // 同時に保存しても一時ファイルがぶつからないように、毎回別の名前にする
+  const tmp = path.join(dir, `.project.${process.pid}.${Date.now()}.${crypto.randomBytes(4).toString('hex')}.tmp`);
   await fs.writeFile(tmp, JSON.stringify(project, null, 2));
   await fs.rename(tmp, projectFile(project.id));
   return project;
 };
+
+/* ---------------- 書き込みの順番待ち ---------------- */
+
+const locks = new Map<string, Promise<unknown>>();
+/**
+ * 同じプロジェクトへの「読んで → 直して → 書く」を1つずつ順番に行う。
+ * 音声・図解などの処理が最新を読み直して書き戻す間に、エディターの保存が割り込んで消えないように
+ */
+export const withProjectLock = <T,>(id: string, fn: () => Promise<T>): Promise<T> => {
+  const prev = locks.get(id) ?? Promise.resolve();
+  const next = prev.then(fn, fn);
+  const tail = next.catch(() => undefined);
+  locks.set(id, tail);
+  void tail.then(() => {
+    if (locks.get(id) === tail) locks.delete(id);
+  });
+  return next;
+};
+
+/** 最新を読み直して fn で直し、保存する（順番待ちの中で） */
+export const updateProject = (id: string, fn: (p: Project) => void | Promise<void>) =>
+  withProjectLock(id, async () => {
+    const latest = await loadProject(id);
+    await fn(latest);
+    return saveProject(latest);
+  });
 
 export type ProjectSummary = {
   id: string;

@@ -339,6 +339,11 @@ export const Project = z.object({
   updatedAt: z.string().optional(),
   /** 最後に編集した人（ログイン時のメールアドレス） */
   updatedBy: z.string().optional(),
+  /**
+   * エディターから保存するたびに1つ増える番号。ほかの人（別のタブ）が先に保存していたら、上書きせずに知らせるのに使う。
+   * 音声・図解などの処理が書き戻す時は変えない
+   */
+  editRev: z.number().int().nonnegative().optional(),
 });
 export type Project = z.infer<typeof Project>;
 export type ProjectInput = z.input<typeof Project>;

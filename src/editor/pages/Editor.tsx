@@ -12,7 +12,7 @@ import { isAudioStale } from '../../video/narrationKey';
 import { FORMATS, Project, type ElementAdjust, type Scene, type SceneType } from '../../video/schema';
 import { newScene, remapCast } from '../../video/templates';
 import { computeTimeline } from '../../video/timeline';
-import { api, ttsFor, waitJob, type Job } from '../api';
+import { api, AUTH_EXPIRED, loginUrl, setUnsavedCheck, ttsFor, waitJob, type Job } from '../api';
 import { go, MetaContext } from '../App';
 import { AudioPanel } from '../components/AudioPanel';
 import { BrandPanel } from '../components/BrandPanel';
@@ -103,12 +103,23 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pending = useRef<Project | null>(null);
   const saving = useRef<Promise<unknown>>(Promise.resolve());
+  const inflight = useRef(0);
+  /** 最後に読み込んだ・保存した版の番号（ほかの人が先に保存していないかの確認に使う） */
+  const editRev = useRef<number | undefined>(undefined);
+  /** ほかの人（別のタブ）が先に保存していた */
+  const [conflict, setConflict] = useState<{ by: string | null; at: string | null } | null>(null);
+  const retries = useRef(0);
+  const lastSaveOk = useRef(true);
+  const [saveErr, setSaveErr] = useState<string | null>(null);
+  /** ログインが切れた（編集が残っているので、ログイン画面へは移っていない） */
+  const [authLost, setAuthLost] = useState(false);
   const history = useRef<{ past: Project[]; future: Project[] }>({ past: [], future: [] });
   // 一時停止中は、映像の要素を直接つかんで動かせる（モードの切り替えは不要）
   const editing = !playing;
 
   const reload = useCallback(async () => {
     const p = await api.get(id);
+    editRev.current = p.editRev;
     setProject(p);
     return p;
   }, [id]);
@@ -117,21 +128,54 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
     reload().catch((e) => setLoadErr(e.message));
   }, [reload]);
 
-  const flush = useCallback(async () => {
+  /**
+   * 保存する。保存できたら true。
+   * 失敗した時は内容を捨てずに残し、少しずつ間隔をあけて自動で保存し直す（通信の瞬断・ログイン切れのあとも、編集が消えない）
+   */
+  const flush = useCallback(async (): Promise<boolean> => {
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = null;
     const p = pending.current;
     pending.current = null;
     if (p) {
       setSaveState('saving');
+      inflight.current++;
       // 保存は直列に（古い内容が新しい内容を上書きしないように）
       saving.current = saving.current
-        .then(() => api.save(p))
-        .then(() => setSaveState(pending.current ? 'dirty' : 'saved'))
-        .catch(() => setSaveState('error'));
+        .then(() => api.save(p, { rev: editRev.current }))
+        .then(
+          (saved) => {
+            editRev.current = saved.editRev;
+            retries.current = 0;
+            lastSaveOk.current = true;
+            setSaveErr(null);
+            setAuthLost(false);
+            setSaveState(pending.current ? 'dirty' : 'saved');
+          },
+          (e: Error & { auth?: boolean; status?: number; body?: { conflict?: { by: string | null; at: string | null } } }) => {
+            lastSaveOk.current = false;
+            // 新しい編集がまだ無ければ、この内容をもう一度保存する
+            if (!pending.current) pending.current = p;
+            setSaveState('error');
+            if (e.status === 409 && e.body?.conflict) {
+              // ほかの人が先に保存していた: 勝手に上書きせず、どうするか聞く（自動では保存し直さない）
+              setSaveErr('ほかの人がこのプロジェクトを先に保存しました');
+              setConflict(e.body.conflict);
+              return;
+            }
+            setSaveErr(e.auth ? 'ログインが切れたため保存できません' : e.message || '保存できませんでした');
+            const wait = Math.min(30_000, 3000 * 2 ** retries.current++);
+            if (saveTimer.current) clearTimeout(saveTimer.current);
+            saveTimer.current = setTimeout(() => void flushRef.current(), wait);
+          },
+        )
+        .finally(() => inflight.current--);
     }
     await saving.current;
+    return lastSaveOk.current && !pending.current;
   }, []);
+  const flushRef = useRef(flush);
+  flushRef.current = flush;
 
   const schedule = useCallback(
     (p: Project) => {
@@ -196,6 +240,8 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
     const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement;
       if (t?.tagName === 'INPUT' || t?.tagName === 'TEXTAREA' || t?.tagName === 'SELECT' || t?.isContentEditable) return;
+      // ダイアログ・メニューを開いている間は、映像の操作（再生・要素を隠す・動かす・取り消す）をしない
+      if (document.querySelector('.sheet-backdrop, body > .menu')) return;
       // 直接編集: 矢印で1px（Shiftで10px）、Delete で非表示、Esc で選択解除
       if (editingRef.current && selectedRef.current) {
         const sc = activeSceneRef.current;
@@ -236,6 +282,12 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
         else undo();
         return;
       }
+      // Windows のやり直し（Ctrl+Y）
+      if (e.ctrlKey && !e.metaKey && e.key.toLowerCase() === 'y') {
+        e.preventDefault();
+        redo();
+        return;
+      }
       if (e.key === ' ') {
         e.preventDefault();
         playerRef.current?.toggle();
@@ -245,19 +297,39 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
     return () => window.removeEventListener('keydown', onKey);
   }, [undo, redo]);
 
+  // 保存できていない編集がある間は、ログインが切れてもログイン画面へ移らない（移ると編集が消える）
+  const unsaved = () => Boolean(pending.current || inflight.current);
+  useEffect(() => setUnsavedCheck(unsaved), []);
   useEffect(() => {
-    const before = () => {
-      if (pending.current) api.save(pending.current);
+    const onExpired = () => setAuthLost(true);
+    window.addEventListener(AUTH_EXPIRED, onExpired);
+    return () => window.removeEventListener(AUTH_EXPIRED, onExpired);
+  }, []);
+  useEffect(() => {
+    // タブを閉じる・再読み込みする時に、保存できていない編集があれば確認する
+    const before = (e: BeforeUnloadEvent) => {
+      if (!unsaved()) return;
+      e.preventDefault();
+      e.returnValue = '';
     };
     window.addEventListener('beforeunload', before);
-    return () => window.removeEventListener('beforeunload', before);
+    return () => {
+      window.removeEventListener('beforeunload', before);
+      // ブラウザの「戻る」などで画面を離れた時も、残っている編集を保存する
+      if (saveTimer.current) clearTimeout(saveTimer.current);
+      if (pending.current) void api.save(pending.current, { rev: editRev.current }).catch(() => undefined);
+    };
   }, []);
 
   /** サーバー側でプロジェクトを書き換えるジョブ（保存→実行→再読み込み） */
   const runJob: RunJob = useCallback(
     async (label, url, body) => {
       setJobErr(null);
-      await flush();
+      // サーバーは保存された内容で処理するので、保存できない時は始めない
+      if (!(await flush())) {
+        setJobErr('編集内容を保存できないため、実行できませんでした。保存できてから、もう一度お試しください');
+        return null;
+      }
       setJob({ label, job: null });
       try {
         const { jobId } = await api.post(url, body);
@@ -601,7 +673,8 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
             className="icon-btn"
             title="プロジェクト一覧へ"
             onClick={async () => {
-              await flush();
+              if (!(await flush()) && !(await confirmDialog({ title: '保存できていない編集があります', message: `${saveErr ?? '保存できませんでした'}。このまま一覧へ戻ると、保存できていない編集は失われます。`, ok: '戻る', danger: true })))
+                return;
               go('/');
             }}
           >
@@ -610,10 +683,15 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
           <img className="tb-logo" src={withBase('/brand/logo.png')} alt="Video Creator" title="Video Creator" />
           <div className="doc-title">
             <input value={project.title} onChange={(e) => update((p) => void (p.title = e.target.value))} aria-label="タイトル" />
-            <span className="status" style={saveState === 'error' ? { color: 'var(--red)' } : undefined}>
-              {saveState === 'error' ? <Ic n={CircleAlert} size={11} mr={0} /> : null}
-              {status}
-            </span>
+            {saveState === 'error' ? (
+              // 保存できなかった時は、押すとすぐ保存し直す（自動でも少しずつ間隔をあけて保存し直している）
+              <button type="button" className="status error" title={`${saveErr ?? ''}\n押すと、すぐ保存し直します`} onClick={() => void flush()}>
+                <Ic n={CircleAlert} size={11} mr={0} />
+                {status}・再試行
+              </button>
+            ) : (
+              <span className="status">{status}</span>
+            )}
           </div>
         </div>
         <Seg
@@ -629,7 +707,7 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
           <button className="icon-btn" onClick={undo} disabled={!history.current.past.length} title="取り消す（⌘Z）">
             <Ic n={Undo2} size={16} mr={0} />
           </button>
-          <button className="icon-btn" onClick={redo} disabled={!history.current.future.length} title="やり直す（⇧⌘Z）">
+          <button className="icon-btn" onClick={redo} disabled={!history.current.future.length} title="やり直す（⇧⌘Z / Ctrl+Y）">
             <Ic n={Redo2} size={16} mr={0} />
           </button>
           <span className="tb-divider" />
@@ -640,7 +718,11 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
           <button
             className="btn primary"
             onClick={async () => {
-              await flush();
+              // 書き出しは保存された内容で行うので、保存できない時は開かない
+              if (!(await flush())) {
+                setJobErr('編集内容を保存できないため、書き出せません。保存できてから、もう一度お試しください');
+                return;
+              }
               setDialog('render');
             }}
           >
@@ -813,6 +895,71 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
           <div className="caption">終わると自動でプレビューに反映されます</div>
         </Sheet>
       ) : null}
+      {conflict ? (
+        <Sheet>
+          <h3>ほかの人がこのプロジェクトを編集しました</h3>
+          <div className="sheet-text">
+            {conflict.by ? `${conflict.by.split('@')[0]} さんが` : 'ほかの画面で'}
+            {conflict.at ? ` ${new Date(conflict.at).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })} に` : ''}
+            保存しています。このまま保存すると、その編集が消えます。
+            <br />
+            最新を読み込むと、まだ保存していないあなたの編集が消えます。
+          </div>
+          <div className="sheet-actions">
+            <button
+              className="btn"
+              onClick={async () => {
+                const p = pending.current;
+                if (!p) return setConflict(null);
+                pending.current = null;
+                setSaveState('saving');
+                try {
+                  const saved = await api.save(p, { force: true });
+                  editRev.current = saved.editRev;
+                  lastSaveOk.current = true;
+                  setSaveErr(null);
+                  setSaveState(pending.current ? 'dirty' : 'saved');
+                } catch (e) {
+                  if (!pending.current) pending.current = p;
+                  setSaveErr((e as Error).message);
+                  setSaveState('error');
+                }
+                setConflict(null);
+              }}
+            >
+              自分の内容で上書き
+            </button>
+            <button
+              className="btn primary"
+              onClick={async () => {
+                if (saveTimer.current) clearTimeout(saveTimer.current);
+                pending.current = null;
+                history.current = { past: [], future: [] };
+                await reload().catch((e) => setJobErr((e as Error).message));
+                lastSaveOk.current = true;
+                setSaveErr(null);
+                setSaveState('saved');
+                setConflict(null);
+              }}
+            >
+              最新を読み込む
+            </button>
+          </div>
+        </Sheet>
+      ) : null}
+      {authLost ? (
+        <div className="toast top" role="alert">
+          <span className="danger-text" style={{ display: 'inline-flex', marginTop: 2 }}>
+            <Ic n={CircleAlert} size={16} mr={0} />
+          </span>
+          <span style={{ flex: 1 }}>
+            ログインが切れました。編集はこの画面に残っています。新しいタブでログインし直すと、自動で保存されます。
+          </span>
+          <a className="btn sm primary" href={loginUrl()} target="_blank" rel="noreferrer">
+            ログインし直す
+          </a>
+        </div>
+      ) : null}
       {jobErr ? (
         <div className="toast" role="alert">
           <span className="danger-text" style={{ display: 'inline-flex', marginTop: 2 }}>
@@ -824,7 +971,7 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
           </button>
         </div>
       ) : null}
-      {dialog === 'render' ? <RenderDialog project={project} onClose={() => setDialog(null)} staleCount={staleCount} missingShots={missingShots} /> : null}
+      {dialog === 'render' ? <RenderDialog project={project} onClose={() => setDialog(null)} missingShots={missingShots} /> : null}
       {dialog === 'revise' ? (
         <ReviseDialog
           onClose={() => setDialog(null)}

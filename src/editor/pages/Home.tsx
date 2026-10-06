@@ -5,6 +5,7 @@ import { api, type ProjectSummary } from '../api';
 import { go, MetaContext } from '../App';
 import { confirmDialog, errorDialog } from '../components/Dialogs';
 import { MenuItem, Popover, Sheet } from '../components/Fields';
+import { isEnter } from '../keys';
 import { Ic } from '../icons';
 import { withBase } from '../base';
 import { APP_VERSION, BUILD_DATE } from '../version';
@@ -126,7 +127,7 @@ const NewSheet: React.FC<{ onClose: () => void }> = ({ onClose }) => {
             value={name}
             placeholder="例: SUSHI TOP OCR"
             onChange={(e) => setName(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && create()}
+            onKeyDown={(e) => isEnter(e) && create()}
           />
           <div className="sheet-actions">
             <button className="btn" onClick={() => setBlank(false)}>
@@ -210,7 +211,11 @@ export const Home: React.FC = () => {
   const [list, setList] = useState<ProjectSummary[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  const [q, setQ] = useState('');
   const load = () => api.list().then(setList).catch((e) => setErr(e.message));
+  // タイトル・商品名・最後に編集した人で絞り込む（全角・半角、大文字・小文字は区別しない）
+  const norm = (v: string) => v.normalize('NFKC').toLowerCase();
+  const shown = (list ?? []).filter((p) => !q.trim() || norm(`${p.title} ${p.brand} ${p.updatedBy ?? ''}`).includes(norm(q.trim())));
   useEffect(() => {
     load();
   }, []);
@@ -236,6 +241,9 @@ export const Home: React.FC = () => {
             <h1 className="title-1">プロジェクト</h1>
             <p>商品の情報から、キャラクターが話す短い広告動画をつくります。</p>
           </div>
+          {(list?.length ?? 0) > 3 ? (
+            <input className="input home-search" type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="プロジェクトを検索" aria-label="プロジェクトを検索" />
+          ) : null}
         </div>
         {!meta.openai ? (
           <div className="notice warn" style={{ marginBottom: 22 }}>
@@ -260,10 +268,11 @@ export const Home: React.FC = () => {
               <div className="sub">AIで作る・テンプレートから作る</div>
             </div>
           </div>
-          {(list ?? []).map((p) => (
+          {shown.map((p) => (
             <ProjectTile key={p.id} p={p} reload={load} />
           ))}
         </div>
+        {list && q.trim() && !shown.length ? <div className="caption" style={{ marginTop: 16 }}>「{q.trim()}」に合うプロジェクトはありません</div> : null}
       </main>
       {creating ? <NewSheet onClose={() => setCreating(false)} /> : null}
     </div>

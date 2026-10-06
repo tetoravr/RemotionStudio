@@ -1,35 +1,84 @@
 import { Download, Film, Play, TriangleAlert } from 'lucide-react';
-import React, { useEffect, useState } from 'react';
+import React, { useContext, useEffect, useRef, useState } from 'react';
+import { isAudioStale } from '../../video/narrationKey';
 import { FORMATS, type Project } from '../../video/schema';
-import { api, waitJob, type Job } from '../api';
+import { api, ttsFor, waitJob, type Job } from '../api';
+import { MetaContext } from '../App';
 import { Ic } from '../icons';
+import { useVoice } from '../voice';
 import { Progress, Sheet } from './Fields';
 
 type RenderItem = { name: string; url: string; size: number; at: number };
 
-export const RenderDialog: React.FC<{ project: Project; onClose: () => void; staleCount: number; missingShots: number[] }> = ({ project, onClose, staleCount, missingShots }) => {
+export const RenderDialog: React.FC<{ project: Project; onClose: () => void; missingShots: number[] }> = ({ project, onClose, missingShots }) => {
+  const meta = useContext(MetaContext)!;
+  const tts = ttsFor(meta, project.audio);
+  const voice = useVoice();
   const [job, setJob] = useState<Job | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [result, setResult] = useState<string | null>(null);
   const [renders, setRenders] = useState<RenderItem[]>([]);
+  const alive = useRef(true);
   const load = () => api.renders(project.id).then(setRenders).catch(() => undefined);
-  useEffect(() => {
-    load();
-  }, []);
 
-  const start = async () => {
-    setErr(null);
-    setResult(null);
-    setJob({ id: '', kind: 'render', status: 'running', progress: 0, message: '準備しています' });
+  // 音声の状態: まだ無いセリフは無音、内容を変えたセリフは前の音声のまま書き出される
+  const lines = project.audio.narration ? project.scenes.flatMap((s) => s.lines).filter((l) => l.text.trim() || l.speak?.trim()) : [];
+  const stale = lines.filter((l) => isAudioStale(l, project.cast, tts.engine));
+  const missingAudio = stale.filter((l) => !l.audio).length;
+  const outdatedAudio = stale.length - missingAudio;
+  const canMakeVoice = Boolean(voice && tts.ready && stale.length);
+
+  const follow = async (jobId: string) => {
     try {
-      const { jobId } = await api.post(`/api/projects/${project.id}/render`);
-      const done = await waitJob(jobId, setJob);
+      const done = await waitJob(jobId, (j) => alive.current && setJob(j));
+      if (!alive.current) return;
       setResult((done.result as { file: string }).file);
       load();
     } catch (e) {
-      setErr((e as Error).message);
+      if (alive.current) setErr((e as Error).message);
     } finally {
-      setJob(null);
+      if (alive.current) setJob(null);
+    }
+  };
+
+  useEffect(() => {
+    alive.current = true;
+    load();
+    // 書き出し中に画面を閉じた・再読み込みした時は、その続きを表示する
+    api
+      .jobs(project.id)
+      .then((list) => {
+        const r = list.find((j) => j.kind === 'render');
+        if (r && alive.current) {
+          setJob(r);
+          void follow(r.id);
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      alive.current = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const start = async (makeVoice: boolean) => {
+    setErr(null);
+    setResult(null);
+    setJob({ id: '', kind: 'render', status: 'running', progress: 0, message: makeVoice ? '音声を作っています' : '準備しています' });
+    if (makeVoice && voice) {
+      // 音声がまだ無い・古いセリフを先に作る（作れなかったセリフは、そのまま書き出す）
+      await voice.request('stale');
+      if (!alive.current) return;
+      setJob({ id: '', kind: 'render', status: 'running', progress: 0, message: '準備しています' });
+    }
+    try {
+      const { jobId } = await api.post(`/api/projects/${project.id}/render`);
+      await follow(jobId);
+    } catch (e) {
+      if (alive.current) {
+        setErr((e as Error).message);
+        setJob(null);
+      }
     }
   };
 
@@ -47,10 +96,16 @@ export const RenderDialog: React.FC<{ project: Project; onClose: () => void; sta
         MP4 ・ {f.label.split('（')[0]} {f.width}×{f.height} ・ {project.fps}fps
       </div>
 
-      {!result && staleCount > 0 && project.audio.narration ? (
+      {!result && !running && stale.length ? (
         <div className="notice warn" style={{ marginBottom: 10 }}>
           <Ic n={TriangleAlert} size={15} mr={0} />
-          <span>音声がまだないセリフが {staleCount} 件あります。その部分は無音になります。</span>
+          <span>
+            {[missingAudio ? `音声がまだないセリフが ${missingAudio} 件（その部分は無音）` : '', outdatedAudio ? `内容を変えて音声が古いセリフが ${outdatedAudio} 件（前の音声のまま）` : '']
+              .filter(Boolean)
+              .join('、')}
+            あります。
+            {canMakeVoice ? '「音声を作ってから書き出す」で、先に作り直せます。' : ''}
+          </span>
         </div>
       ) : null}
       {!result && missingShots.length ? (
@@ -63,9 +118,11 @@ export const RenderDialog: React.FC<{ project: Project; onClose: () => void; sta
         <>
           <div className="hstack">
             <span className="spinner" />
-            <span className="muted">{job?.message}</span>
+            <span className="muted">
+              {!job?.id && voice?.progress ? `音声を作っています ${voice.progress.done}/${voice.progress.total}` : job?.message}
+            </span>
           </div>
-          <Progress value={job?.progress ?? 0} />
+          <Progress value={!job?.id && voice?.progress ? voice.progress.done / Math.max(1, voice.progress.total) : job?.progress ?? 0} />
           <div className="caption">30秒の動画で2〜4分ほどかかります。このままお待ちください。</div>
         </>
       ) : null}
@@ -88,9 +145,20 @@ export const RenderDialog: React.FC<{ project: Project; onClose: () => void; sta
             <button className="btn" onClick={onClose}>
               キャンセル
             </button>
-            <button className="btn primary" onClick={start} disabled={missingShots.length > 0}>
-              書き出す
-            </button>
+            {canMakeVoice ? (
+              <>
+                <button className="btn" onClick={() => void start(false)} disabled={missingShots.length > 0}>
+                  このまま書き出す
+                </button>
+                <button className="btn primary" onClick={() => void start(true)} disabled={missingShots.length > 0}>
+                  音声を作ってから書き出す
+                </button>
+              </>
+            ) : (
+              <button className="btn primary" onClick={() => void start(false)} disabled={missingShots.length > 0}>
+                書き出す
+              </button>
+            )}
           </>
         ) : null}
       </div>

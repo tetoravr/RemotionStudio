@@ -24,7 +24,7 @@ const STYLE_LABELS: Record<string, string> = {
   '3d': '3Dトイ風',
 };
 
-export const CastPanel: React.FC<{ project: Project; update: Update; runJob: RunJob; flush: () => Promise<void> }> = ({ project, update, runJob }) => (
+export const CastPanel: React.FC<{ project: Project; update: Update; runJob: RunJob; flush: () => Promise<boolean> }> = ({ project, update, runJob }) => (
   <div>
     <Section title="キャスト" right={<span className="caption">1人目が説明役・2人目がリアクション役</span>}>
       {project.cast.map((c, i) => (

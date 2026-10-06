@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { TriangleAlert } from 'lucide-react';
 import { Ic } from '../icons';
+import { isEnter } from '../keys';
 
 /**
  * アプリ内の確認・入力ダイアログ。
@@ -67,7 +68,7 @@ const PromptBody: React.FC<{ o: Opts & { placeholder?: string; initial?: string 
         placeholder={o.placeholder}
         onChange={(e) => setV(e.target.value)}
         onKeyDown={(e) => {
-          if (e.key === 'Enter' && v.trim()) done(v.trim());
+          if (isEnter(e) && v.trim()) done(v.trim());
         }}
       />
       <div className="sheet-actions">

@@ -22,7 +22,8 @@ import { config, hasOpenAI, ROOT } from './env';
 import { conflictFor, getJob, runningJobs, startJob } from './jobs';
 import { generateNarration, staleLines } from './narration';
 import {
-  deleteProject, duplicateProject, emptyTrash, listProjects, loadProject, newProjectId, projectDir, saveAsset, saveProject, seedSamples,
+  deleteProject, duplicateProject, emptyTrash, listProjects, loadProject, newProjectId, projectDir, saveAsset, saveProject, seedSamples, updateProject,
+  withProjectLock,
 } from './projects';
 import { renderProject, withFileServer } from './render';
 import { authEnabled, authProblems, authRouter, currentUser, requireLogin } from './auth';
@@ -105,7 +106,21 @@ app.put(
     }
     // 誰が最後に編集したか（ログイン時のみ）
     const user = currentUser(req);
-    res.json(await saveProject({ ...parsed.data, updatedBy: user?.email ?? parsed.data.updatedBy }));
+    const force = req.query.force === '1';
+    // エディターが読み込んだ版の番号（none は番号が付く前の版）。この見出しが無い保存（古い画面・CLI）は確認しない
+    const base = req.get('X-Edit-Rev');
+    const result = await withProjectLock(id, async () => {
+      const current = await loadProject(id).catch(() => null);
+      // 読み込んだあとに、ほかの人（別のタブ）が保存していたら、上書きせずに知らせる
+      if (!force && base != null && current?.editRev != null && String(current.editRev) !== base)
+        return { conflict: { by: current.updatedBy ?? null, at: current.updatedAt ?? null } };
+      return { saved: await saveProject({ ...parsed.data, editRev: (current?.editRev ?? 0) + 1, updatedBy: user?.email ?? parsed.data.updatedBy }) };
+    });
+    if ('conflict' in result) {
+      res.status(409).json({ error: 'ほかの人がこのプロジェクトを先に保存しました', conflict: result.conflict });
+      return;
+    }
+    res.json(result.saved);
   }),
 );
 
@@ -176,6 +191,20 @@ app.post(
     res.json({ staged, name, size: await imageSize(req.file.buffer) });
   }),
 );
+
+/** 新規作成をやめた時などに残った、1日より前の預かりファイルを片付ける */
+const cleanStaging = () => {
+  const dir = stagingDir();
+  const old = Date.now() - 24 * 60 * 60_000;
+  for (const f of fs.existsSync(dir) ? fs.readdirSync(dir) : []) {
+    const file = path.join(dir, f);
+    try {
+      if (fs.statSync(file).mtimeMs < old) fs.rmSync(file, { force: true });
+    } catch {
+      // 消せなければ次の起動時に
+    }
+  }
+};
 
 /** 預かったスクリーンショットをプロジェクトの assets に移す */
 const adoptStaged = async (projectId: string, staged: string): Promise<ScreenshotRef> => {
@@ -314,7 +343,7 @@ app.post(
       next.scenes = keepScreenshots(project, next.scenes);
       keepIllustrations(project, next);
       await resolveMedia(next, (n, d) => saveAsset(id, n, d), { onProgress: (p, m) => ctx.progress(0.5 + p * 0.5, m) }).catch(() => null);
-      await saveProject(next);
+      await withProjectLock(id, () => saveProject(next));
       return { projectId: id };
     });
     res.json({ jobId: job.id });
@@ -350,10 +379,10 @@ app.post(
         failure = e;
       }
       // 生成中にエディタで編集された内容を壊さないよう、最新を読み直して音声だけ反映
-      const latest = await loadProject(id);
       const audio = new Map(project.scenes.flatMap((s) => s.lines.map((l) => [l.id, l.audio] as const)));
-      for (const s of latest.scenes) for (const l of s.lines) if (audio.get(l.id)) l.audio = audio.get(l.id);
-      await saveProject(latest);
+      await updateProject(id, (latest) => {
+        for (const s of latest.scenes) for (const l of s.lines) if (audio.get(l.id)) l.audio = audio.get(l.id);
+      });
       // 今回作った音声を結果で返す。エディターは保存されたプロジェクトを読み直さず、これをそのまま取り込む
       // （読み直すと、その間にエディターが保存した前の音声に戻っていることがあるため）
       const made: Record<string, unknown> = {};
@@ -393,16 +422,16 @@ app.post(
         },
         (p, m) => ctx.progress(p, m),
       );
-      const latest = await loadProject(id);
-      const member = latest.cast.find((c) => c.id === param(req, 'castId'));
-      if (member) {
-        member.images = result.images;
-        member.imagesOpen = result.imagesOpen;
-        member.library = undefined;
-        member.aspect = result.aspect;
-        // 画像が変わったので、口パクデータは変わらない（音声は同じ）。表情の欠けはそのまま近い表情で代用される
-      }
-      await saveProject(latest);
+      await updateProject(id, (latest) => {
+        const member = latest.cast.find((c) => c.id === param(req, 'castId'));
+        if (member) {
+          member.images = result.images;
+          member.imagesOpen = result.imagesOpen;
+          member.library = undefined;
+          member.aspect = result.aspect;
+          // 画像が変わったので、口パクデータは変わらない（音声は同じ）。表情の欠けはそのまま近い表情で代用される
+        }
+      });
       return { count: Object.keys(result.images).length, failures: result.failures };
     });
     res.json({ jobId: job.id });
@@ -420,7 +449,7 @@ app.post(
       provider === 'elevenlabs'
         ? withAudioTags(plain, Array.isArray(tags) ? (tags as unknown[]).map((t) => normalizeTag(String(t))).filter(Boolean).slice(0, 3) : [])
         : stripAudioTags(plain);
-    const tmp = path.join(config.projectsDir, `.tts-preview-${Date.now()}.wav`);
+    const tmp = path.join(config.projectsDir, `.tts-preview-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.wav`);
     try {
       await synthesizeToFile(input, voice ?? DEFAULT_CAST[0].voice, tmp, {
         delivery: delivery || undefined,
@@ -451,13 +480,13 @@ app.post(
       const r = await resolveMedia(project, (n, d) => saveAsset(id, n, d), { sceneIds, onProgress: (p, m) => ctx.progress(p, m) });
       if (r.errors.length) throw new Error(`図解の生成に失敗しました: ${r.errors[0]}`);
       // 生成中の編集を壊さないよう、最新を読み直して画像だけ反映
-      const latest = await loadProject(id);
-      for (const s of latest.scenes) {
-        const made = project.scenes.find((x) => x.id === s.id);
-        if (s.type === 'talk' && s.prop && made?.type === 'talk' && made.prop?.image) s.prop.image = made.prop.image;
-        if (s.type === 'feature' && made?.type === 'feature' && made.visual.kind === 'image' && s.visual.kind === 'image') s.visual.src = made.visual.src;
-      }
-      await saveProject(latest);
+      await updateProject(id, (latest) => {
+        for (const s of latest.scenes) {
+          const made = project.scenes.find((x) => x.id === s.id);
+          if (s.type === 'talk' && s.prop && made?.type === 'talk' && made.prop?.image) s.prop.image = made.prop.image;
+          if (s.type === 'feature' && made?.type === 'feature' && made.visual.kind === 'image' && s.visual.kind === 'image') s.visual.src = made.visual.src;
+        }
+      });
       return r;
     });
     res.json({ jobId: job.id });
@@ -653,6 +682,11 @@ app.post(
   }),
 );
 
+/** このプロジェクトで動いている処理（画面を開き直した時に、書き出しなどの続きを表示する） */
+app.get('/api/projects/:id/jobs', (req, res) => {
+  res.json(runningJobs(param(req, 'id')).map(({ id, kind, status, progress, message }) => ({ id, kind, status, progress, message })));
+});
+
 app.get('/api/jobs/:id', (req, res) => {
   const job = getJob(param(req, 'id'));
   if (!job) {
@@ -663,7 +697,17 @@ app.get('/api/jobs/:id', (req, res) => {
 });
 
 // ---------- 静的ファイル ----------
-app.use('/files', express.static(config.projectsDir, { fallthrough: false, cacheControl: false }));
+app.use(
+  '/files',
+  express.static(config.projectsDir, {
+    fallthrough: false,
+    cacheControl: false,
+    // アップロードされた SVG・HTML を直接開いても、中のスクリプトは動かさない（<img> などで使う分には影響しない）
+    setHeaders: (res, file) => {
+      if (/\.(svg|html?|xhtml|xml)$/i.test(file)) res.setHeader('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; img-src data:; sandbox");
+    },
+  }),
+);
 const dist = path.join(ROOT, 'dist');
 if (fs.existsSync(dist)) {
   app.use(express.static(dist));
@@ -697,6 +741,7 @@ root.use(config.basePath || '/', app);
 
 await seedSamples();
 await emptyTrash();
+cleanStaging();
 root.listen(config.port, config.host, async () => {
   console.log(`\n  Video Creator server: http://localhost:${config.port}${config.basePath}/`);
   console.log(`  ログイン: ${authEnabled() ? `Google（${[...(process.env.AUTH_ALLOWED_DOMAINS ?? '').split(','), ...(process.env.AUTH_ALLOWED_EMAILS ?? '').split(',')].filter(Boolean).join(', ')}）` : 'なし（このPCだけで使う設定）'}`);
