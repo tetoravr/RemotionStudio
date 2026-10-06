@@ -23,6 +23,12 @@ export const config = {
   /** 製品のUIスクリーンショット置き場。台本AIが中身を見て、合う画面を動画に使う */
   uiDir: path.resolve(ROOT, process.env.UI_LIBRARY_DIR || 'SUSHI UI'),
   openaiKey: process.env.OPENAI_API_KEY || '',
+  /** 社内 Notion の読み込み（Notion の内部連携のトークン）。無ければ Notion は使わない */
+  notion: {
+    token: (process.env.NOTION_TOKEN || '').trim(),
+    /** API の接続先（テスト用に差し替える時だけ） */
+    baseUrl: (process.env.NOTION_API_URL || 'https://api.notion.com').replace(/\/+$/, ''),
+  },
   models: {
     text: process.env.OPENAI_TEXT_MODEL || 'gpt-5.5',
     tts: process.env.OPENAI_TTS_MODEL || 'gpt-4o-mini-tts',

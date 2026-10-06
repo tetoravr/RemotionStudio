@@ -4,6 +4,8 @@ import { withBase } from './base';
 
 export type Meta = {
   openai: boolean;
+  /** 社内 Notion を資料として読めるか */
+  notion?: boolean;
   /** 戻り先のポータル（SUSHI CREATOR など）。無ければ null */
   portal?: { url: string; name: string } | null;
   models: { text: string; tts: string; image: string };
@@ -133,6 +135,11 @@ export const api = {
   post: (url: string, body: unknown = {}) =>
     fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then((r) => json<{ jobId: string }>(r)),
   job: (id: string) => fetch(`/api/jobs/${id}`).then((r) => json<Job>(r)),
+  /** 社内 Notion のページを探す */
+  notionSearch: (q: string) =>
+    fetch(`/api/notion/search?${new URLSearchParams({ q })}`).then((r) =>
+      json<{ results: { id: string; title: string; url: string; editedAt?: string; kind: 'page' | 'database' }[] }>(r),
+    ),
   /** このプロジェクトで動いている処理 */
   jobs: (projectId: string) => fetch(`/api/projects/${projectId}/jobs`).then((r) => json<Job[]>(r)),
   /** URL・資料からブリーフの下書きを作るジョブを始める */

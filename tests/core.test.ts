@@ -786,3 +786,60 @@ test('保存: 同時に保存・更新しても壊れず、「読んで直して
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 });
+
+test('Notion: URL から ID を取り出し、共有されたページを見出し・箇条書きの形で読む（子ページの中は読まない）', async () => {
+  const { notionIdFrom, isNotionUrl, readNotion, searchNotion } = await import('../server/ai/notion');
+  const ID = '0640b7b71cc046f2b0fb51b43b1a9108';
+  const UUID = '0640b7b7-1cc0-46f2-b0fb-51b43b1a9108';
+  assert.equal(notionIdFrom(`https://www.notion.so/SUSHI-TOP-${ID}`), UUID);
+  assert.equal(notionIdFrom(`https://app.notion.com/p/${ID}?pvs=204`), UUID);
+  assert.equal(notionIdFrom(`https://www.notion.so/team/abc?p=${ID}&pm=s`), UUID);
+  assert.equal(notionIdFrom('https://www.notion.so/no-id-here'), null);
+  assert.ok(isNotionUrl('https://acme.notion.site/x') && isNotionUrl('https://www.notion.so/x') && !isNotionUrl('https://example.com/notion.so'));
+
+  const rt = (t: string) => [{ plain_text: t }];
+  const blocks: Record<string, unknown[]> = {
+    [UUID]: [
+      { id: 'h', type: 'heading_2', heading_2: { rich_text: rt('1. NFT Top Shot') } },
+      { id: 'p', type: 'paragraph', paragraph: { rich_text: rt('NFTを簡単に配信するサービスです。') } },
+      { id: 'l', type: 'bulleted_list_item', has_children: true, bulleted_list_item: { rich_text: rt('ICカードで配布') } },
+      { id: 'c', type: 'child_page', has_children: true, child_page: { title: '社外秘の議事録' } },
+    ],
+    l: [{ id: 'l2', type: 'bulleted_list_item', bulleted_list_item: { rich_text: rt('LINE で配布') } }],
+    c: [{ id: 'secret', type: 'paragraph', paragraph: { rich_text: rt('読まれてはいけない内容') } }],
+  };
+  const server = http.createServer((req, res) => {
+    res.setHeader('content-type', 'application/json');
+    assert.equal(req.headers.authorization, 'Bearer secret_test');
+    const u = req.url ?? '';
+    let m = u.match(/^\/v1\/pages\/([^/?]+)/);
+    if (m) return void (m[1] === UUID ? res.end(JSON.stringify({ id: UUID, url: `https://www.notion.so/${ID}`, properties: { Name: { type: 'title', title: rt('SUSHI TOP社 サービス概要') }, Tags: { type: 'multi_select', multi_select: [{ name: '営業' }] } } })) : ((res.statusCode = 404), res.end(JSON.stringify({ code: 'object_not_found', message: 'not found' }))));
+    m = u.match(/^\/v1\/blocks\/([^/?]+)\/children/);
+    if (m) return void res.end(JSON.stringify({ results: blocks[m[1]] ?? [], has_more: false, next_cursor: null }));
+    if (u.startsWith('/v1/databases/')) return void ((res.statusCode = 404), res.end(JSON.stringify({ code: 'object_not_found' })));
+    if (u === '/v1/search') return void res.end(JSON.stringify({ results: [{ object: 'page', id: UUID, url: 'https://www.notion.so/x', last_edited_time: '2026-01-04T00:00:00Z', properties: { Name: { type: 'title', title: rt('SUSHI TOP社 サービス概要') } } }] }));
+    res.statusCode = 404;
+    res.end('{}');
+  });
+  await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+  const saved = { ...config.notion };
+  Object.assign(config.notion, { token: 'secret_test', baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}` });
+  try {
+    const doc = await readNotion(`https://www.notion.so/SUSHI-TOP-${ID}`);
+    assert.equal(doc.title, 'SUSHI TOP社 サービス概要');
+    assert.match(doc.text, /Tags: 営業/);
+    assert.match(doc.text, /## 1\. NFT Top Shot/);
+    assert.match(doc.text, /- ICカードで配布\n {2}- LINE で配布/);
+    assert.match(doc.text, /（子ページ: 社外秘の議事録）/);
+    assert.ok(!doc.text.includes('読まれてはいけない内容'), 'does not read inside child pages');
+    // 共有されていないページは、共有のしかたを伝える
+    await assert.rejects(readNotion('https://www.notion.so/ffffffffffffffffffffffffffffffff'), /接続/);
+    assert.equal((await searchNotion('サービス'))[0].title, 'SUSHI TOP社 サービス概要');
+    // トークンが無ければ読まない
+    config.notion.token = '';
+    await assert.rejects(readNotion(`https://www.notion.so/${ID}`), /NOTION_TOKEN/);
+  } finally {
+    Object.assign(config.notion, saved);
+    server.close();
+  }
+});

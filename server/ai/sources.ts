@@ -4,6 +4,7 @@ import zlib from 'node:zlib';
 import { authEnabled } from '../auth';
 import { config } from '../env';
 import { getOpenAI } from './client';
+import { isNotionUrl, readNotion } from './notion';
 import type { Brief } from './storyboard';
 
 /**
@@ -238,6 +239,15 @@ export const collectSources = async (input: SourceInput) => {
     const url = raw.trim();
     if (!url) continue;
     try {
+      // Notion のページはログインが要るので、Notion の連携で読む
+      if (isNotionUrl(url)) {
+        const doc = await readNotion(url);
+        const text = clip(doc.text);
+        if (!text.trim()) throw new Error(`Notion の「${doc.title}」から文字を読み取れませんでした`);
+        parts.push({ type: 'input_text', text: `# 社内資料（Notion）: ${doc.title}\n${text}` });
+        sources.push({ label: `Notion「${doc.title}」`, chars: text.length });
+        continue;
+      }
       const r = await fetchUrl(url);
       if ('page' in r) {
         const p = r.page;
