@@ -760,3 +760,29 @@ test('元に戻す: 戻した内容に合う音声が今・履歴にあれば引
   line(p0).audio!.hash = hashOf(p0);
   assert.equal(line(carryAudio(p0, [p2], engine)).audio?.src, 'audio/old.wav');
 });
+
+test('保存: 同時に保存・更新しても壊れず、「読んで直して書く」は1つずつ順番に行う', async () => {
+  const { saveProject, updateProject, loadProject } = await import('../server/projects');
+  const savedDir = config.projectsDir;
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'projects-test-'));
+  config.projectsDir = tmp;
+  try {
+    const base = Project.parse({ ...structuredClone(sample), id: 'lock-test', title: '0' });
+    await saveProject(base);
+    // 20回の「読んで +1 して書く」と、割り込む保存を同時に走らせる
+    await Promise.all([
+      ...Array.from({ length: 20 }, () => updateProject('lock-test', (p) => void (p.title = String(Number(p.title) + 1)))),
+      ...Array.from({ length: 5 }, () => saveProject({ ...base, brand: { ...base.brand, tagline: 'x' } }).catch((e) => e)),
+    ]);
+    const p = await loadProject('lock-test');
+    assert.ok(Number(p.title) >= 0, 'still a valid project');
+    // 割り込む保存が無ければ、20回分すべて反映される
+    await saveProject({ ...base, title: '0' });
+    await Promise.all(Array.from({ length: 20 }, () => updateProject('lock-test', (q) => void (q.title = String(Number(q.title) + 1)))));
+    assert.equal((await loadProject('lock-test')).title, '20');
+    assert.deepEqual(fs.readdirSync(path.join(tmp, 'lock-test')).filter((f) => f.endsWith('.tmp')), [], 'no leftover temp files');
+  } finally {
+    config.projectsDir = savedDir;
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});

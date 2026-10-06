@@ -80,7 +80,7 @@ export const useVoiceUpdater = ({
   project: Project | null;
   engine: string;
   ready: boolean;
-  flush: () => Promise<void>;
+  flush: () => Promise<boolean>;
   update: Update;
   projectRef: React.RefObject<Project | null>;
   pauseVideo: () => void;
@@ -195,10 +195,9 @@ export const useVoiceUpdater = ({
       let snapshot = new Map<string, string>();
       let made: Record<string, Line['audio']> | null = null;
       try {
-        // 画面の編集を先に保存してから作る（サーバーは保存された内容で作る）
-        await flush();
-        const saved = projectRef.current ?? p;
-        snapshot = new Map(list.map((id) => [id, hashOf(saved, id)]));
+        // 画面の編集を先に保存してから作る（サーバーは保存された内容で作る）。頼んだ時の内容は保存する前に控える
+        snapshot = new Map(list.map((id) => [id, hashOf(projectRef.current ?? p, id)]));
+        if (!(await flush())) throw new Error('編集内容を保存できないため、音声を作れませんでした');
         let jobId: string | null = null;
         for (let i = 0; i < 60 && !jobId; i++) {
           const res = await fetch(`/api/projects/${p.id}/narration`, {

@@ -358,12 +358,18 @@ code { font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: 0.92em
   background: var(--glass); backdrop-filter: blur(24px) saturate(1.6); -webkit-backdrop-filter: blur(24px) saturate(1.6);
   box-shadow: var(--shadow-lg); font-size: 13px; line-height: 1.5; white-space: pre-wrap; animation: sheet 0.2s ease-out;
 }
+/* 画面の上に出す知らせ（下の知らせと重ならないように） */
+.toast.top { top: 64px; bottom: auto; align-items: center; }
 
 /* ==========================================================================
    ホーム
    ========================================================================== */
 .home { min-height: 100%; }
 .home-bar { position: sticky; top: 0; z-index: 10; display: flex; align-items: center; gap: 12px; height: 52px; padding: 0 28px; background: var(--glass); backdrop-filter: blur(20px) saturate(1.6); -webkit-backdrop-filter: blur(20px) saturate(1.6); border-bottom: 1px solid var(--separator); }
+/* 戻り先のポータル（SUSHI CREATOR など）へのリンク */
+.portal-back { display: inline-flex; align-items: center; gap: 2px; margin-left: -8px; padding: 5px 8px 5px 4px; border-radius: 8px; color: var(--accent); font-size: 13px; font-weight: 500; text-decoration: none; white-space: nowrap; }
+.portal-back:hover { background: var(--fill); }
+.portal-sep { width: 1px; height: 18px; background: var(--separator); flex: none; }
 .wordmark { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 14px; letter-spacing: -0.01em; }
 .wordmark .logo { width: 24px; height: 24px; border-radius: 6px; display: block; }
 /* バージョン（薄く小さく） */
@@ -371,6 +377,7 @@ code { font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: 0.92em
 .home-main { max-width: 1120px; margin: 0 auto; padding: 36px 28px 80px; }
 .home-head { display: flex; align-items: flex-end; gap: 16px; margin-bottom: 26px; }
 .home-head p { margin: 6px 0 0; color: var(--text-2); font-size: 14px; }
+.home-search { width: 240px; max-width: 45vw; }
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 28px 22px; }
 .tile { display: flex; flex-direction: column; gap: 10px; cursor: pointer; min-width: 0; position: relative; }
 .tile .art {
@@ -457,6 +464,9 @@ code { font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: 0.92em
 .doc-title input:hover { background: var(--fill-2); }
 .doc-title input:focus { background: var(--surface); box-shadow: 0 0 0 3px var(--accent-ring); }
 .doc-title .status { font-size: 11px; color: var(--text-3); display: flex; align-items: center; gap: 4px; height: 14px; }
+.doc-title button.status { border: 0; background: none; padding: 0; font: inherit; font-size: 11px; cursor: pointer; }
+.doc-title .status.error { color: var(--red); }
+.doc-title .status.error:hover { text-decoration: underline; }
 .tb-divider { width: 1px; height: 18px; background: var(--separator); margin: 0 4px; flex: none; }
 
 .workspace { display: grid; grid-template-columns: 224px minmax(0, 1fr) 320px 324px; min-height: 0; min-width: 0; }

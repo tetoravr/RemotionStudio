@@ -4,6 +4,8 @@ import { withBase } from './base';
 
 export type Meta = {
   openai: boolean;
+  /** 戻り先のポータル（SUSHI CREATOR など）。無ければ null */
+  portal?: { url: string; name: string } | null;
   models: { text: string; tts: string; image: string };
   tts: {
     default: TtsProvider;
@@ -68,14 +70,34 @@ export type Job = {
   error?: string;
 };
 
+/** ログイン画面の URL（戻り先は今の画面） */
+export const loginUrl = () => `${withBase('/auth/login')}?next=${encodeURIComponent(window.location.pathname + window.location.hash)}`;
+
+/**
+ * まだ保存できていない編集があるか（エディターが登録する）。
+ * ある間は、ログインが切れてもログイン画面へは移らない（移ると編集が消える）。代わりに vc:auth-expired を出す
+ */
+let unsavedEdits: () => boolean = () => false;
+export const setUnsavedCheck = (fn: () => boolean) => {
+  unsavedEdits = fn;
+  return () => {
+    if (unsavedEdits === fn) unsavedEdits = () => false;
+  };
+};
+export const AUTH_EXPIRED = 'vc:auth-expired';
+
 const json = async <T,>(res: Response): Promise<T> => {
-  // ログインが切れていたら、ログイン画面へ（戻り先に今の画面を付ける）
   if (res.status === 401) {
-    window.location.href = `${withBase('/auth/login')}?next=${encodeURIComponent(window.location.pathname + window.location.hash)}`;
-    throw new Error('ログインしてください');
+    if (unsavedEdits()) {
+      window.dispatchEvent(new Event(AUTH_EXPIRED));
+      throw Object.assign(new Error('ログインが切れました'), { auth: true });
+    }
+    // 編集が残っていなければ、ログイン画面へ（戻り先に今の画面を付ける）
+    window.location.href = loginUrl();
+    throw Object.assign(new Error('ログインしてください'), { auth: true });
   }
   const body = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error((body as { error?: string }).error || `HTTP ${res.status}`);
+  if (!res.ok) throw Object.assign(new Error((body as { error?: string }).error || `HTTP ${res.status}`), { status: res.status, body });
   return body as T;
 };
 
@@ -87,8 +109,13 @@ export const api = {
   get: (id: string) => fetch(`/api/projects/${id}`).then((r) => json<Project>(r)),
   create: (body: { title: string; brandName: string; format: Project['format'] }) =>
     fetch('/api/projects', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then((r) => json<Project>(r)),
-  save: (p: Project) =>
-    fetch(`/api/projects/${p.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(p) }).then((r) => json<Project>(r)),
+  /** rev は読み込んだ版の番号（ほかの人が先に保存していたら 409）。force=true は、それでも上書きする */
+  save: (p: Project, opts: { rev?: number; force?: boolean } = {}) =>
+    fetch(`/api/projects/${p.id}${opts.force ? '?force=1' : ''}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'X-Edit-Rev': opts.rev == null ? 'none' : String(opts.rev) },
+      body: JSON.stringify(p),
+    }).then((r) => json<Project>(r)),
   remove: (id: string) => fetch(`/api/projects/${id}`, { method: 'DELETE' }).then((r) => json<{ ok: boolean }>(r)),
   duplicate: (id: string) => fetch(`/api/projects/${id}/duplicate`, { method: 'POST' }).then((r) => json<Project>(r)),
   upload: (id: string, file: File) => {
@@ -106,6 +133,8 @@ export const api = {
   post: (url: string, body: unknown = {}) =>
     fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then((r) => json<{ jobId: string }>(r)),
   job: (id: string) => fetch(`/api/jobs/${id}`).then((r) => json<Job>(r)),
+  /** このプロジェクトで動いている処理 */
+  jobs: (projectId: string) => fetch(`/api/projects/${projectId}/jobs`).then((r) => json<Job[]>(r)),
   /** URL・資料からブリーフの下書きを作るジョブを始める */
   briefFromSources: (urls: string[], files: File[], hint: string) => {
     const fd = new FormData();
@@ -151,10 +180,27 @@ export const api = {
   },
 };
 
-/** ジョブを完了までポーリング */
+/**
+ * ジョブを完了までポーリング。
+ * 通信が一瞬切れただけで失敗扱いにしない（ジョブはサーバーで動き続けているので、つながるまで待つ）。
+ * ジョブが見つからない時は、サーバーが再起動して処理が中断されたということ
+ */
 export const waitJob = async (jobId: string, onUpdate: (j: Job) => void): Promise<Job> => {
+  let misses = 0;
   for (;;) {
-    const j = await api.job(jobId);
+    let j: Job;
+    try {
+      const res = await fetch(`/api/jobs/${jobId}`);
+      if (res.status === 404) throw Object.assign(new Error('サーバーが再起動したため、処理が中断されました。もう一度お試しください'), { final: true });
+      j = await json<Job>(res);
+      misses = 0;
+    } catch (e) {
+      if ((e as { final?: boolean }).final) throw e;
+      // ログインが切れた時は、ログインし直すまで待つ。それ以外は約1分つながらなければあきらめる
+      if (!(e as { auth?: boolean }).auth && ++misses > 20) throw new Error('サーバーに接続できません。ネットワークを確認して、もう一度お試しください');
+      await new Promise((r) => setTimeout(r, 3000));
+      continue;
+    }
     onUpdate(j);
     if (j.status !== 'running') {
       if (j.status === 'error') throw new Error(j.error || '失敗しました');
@@ -163,3 +209,4 @@ export const waitJob = async (jobId: string, onUpdate: (j: Job) => void): Promis
     await new Promise((r) => setTimeout(r, 1000));
   }
 };
+

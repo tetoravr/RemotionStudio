@@ -1,5 +1,5 @@
 import { ArrowRight, ChevronLeft, FileText, ImagePlus, Sparkles, Upload, X } from 'lucide-react';
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import type { Project } from '../../video/schema';
 import { api, waitJob, type Job } from '../api';
 import { go } from '../App';
@@ -91,17 +91,36 @@ const DropZone: React.FC<{ accept: string; onFiles: (f: File[]) => void; icon: t
   );
 };
 
+/** 入力途中の内容（再読み込み・戻るで消えないように、このブラウザに残す。作成できたら消す） */
+const DRAFT_KEY = 'vc:new-draft';
+type Draft = { step: number; b: Brief; format: Project['format']; urls: string; hint: string };
+const readDraft = (): Partial<Draft> => {
+  try {
+    return JSON.parse(localStorage.getItem(DRAFT_KEY) ?? '{}') as Partial<Draft>;
+  } catch {
+    return {};
+  }
+};
+
 export const NewWizard: React.FC = () => {
-  const [step, setStep] = useState(0);
-  const [b, setB] = useState<Brief>(EMPTY);
-  const [format, setFormat] = useState<Project['format']>('vertical');
+  const [saved] = useState(readDraft);
+  const [step, setStep] = useState(saved.step ?? 0);
+  const [b, setB] = useState<Brief>({ ...EMPTY, ...saved.b });
+  const [format, setFormat] = useState<Project['format']>(saved.format ?? 'vertical');
   const [job, setJob] = useState<Job | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [shots, setShots] = useState<{ staged: string; name: string; url: string }[]>([]);
   // URL・資料から読み込む
-  const [urls, setUrls] = useState('');
+  const [urls, setUrls] = useState(saved.urls ?? '');
   const [docs, setDocs] = useState<File[]>([]);
-  const [hint, setHint] = useState('');
+  const [hint, setHint] = useState(saved.hint ?? '');
+  useEffect(() => {
+    try {
+      localStorage.setItem(DRAFT_KEY, JSON.stringify({ step, b, format, urls, hint } satisfies Draft));
+    } catch {
+      // 保存できない環境（プライベートブラウズなど）では残さない
+    }
+  }, [step, b, format, urls, hint]);
   const [colors, setColors] = useState<Project['brand']['colors'] | null>(null);
   const [draft, setDraft] = useState<{ sources: { label: string; chars?: number; note?: string }[]; cautions: string[] } | null>(null);
   const [reading, setReading] = useState<Job | null>(null);
@@ -150,6 +169,11 @@ export const NewWizard: React.FC = () => {
     try {
       const { jobId } = await api.post('/api/ai/storyboard', { brief: b, format, colors: colors ?? undefined, screenshots: shots.map((x) => ({ staged: x.staged, name: x.name })) });
       const done = await waitJob(jobId, setJob);
+      try {
+        localStorage.removeItem(DRAFT_KEY);
+      } catch {
+        // 消せなくても続ける
+      }
       go(`/p/${(done.result as { projectId: string }).projectId}`);
     } catch (e) {
       setErr((e as Error).message);
@@ -175,9 +199,28 @@ export const NewWizard: React.FC = () => {
             </React.Fragment>
           ))}
         </div>
-        <button className="btn quiet" onClick={() => setB(EXAMPLE)} title="SUSHI TOP OCR の記入例を入れます">
-          記入例を使う
-        </button>
+        <div className="hstack" style={{ gap: 4 }}>
+          {Object.values(b).some((v) => typeof v === 'string' && v.trim()) || urls.trim() || hint.trim() ? (
+            <button
+              className="btn quiet"
+              title="入力した内容を消して、最初から入力します"
+              onClick={() => {
+                setB(EMPTY);
+                setUrls('');
+                setHint('');
+                setDocs([]);
+                setColors(null);
+                setDraft(null);
+                setStep(0);
+              }}
+            >
+              クリア
+            </button>
+          ) : null}
+          <button className="btn quiet" onClick={() => setB(EXAMPLE)} title="SUSHI TOP OCR の記入例を入れます">
+            記入例を使う
+          </button>
+        </div>
       </header>
 
       <main className="flow-main">
