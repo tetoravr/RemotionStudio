@@ -24,6 +24,7 @@ import { LinesPanel } from '../components/LinesPanel';
 import { confirmDialog } from '../components/Dialogs';
 import { Progress, Seg, Sheet } from '../components/Fields';
 import { RenderDialog } from '../components/RenderDialog';
+import { Splash } from '../components/Splash';
 import { ReviseDialog } from '../components/ReviseDialog';
 import { SceneInspector } from '../components/SceneInspector';
 import { SceneNavigator } from '../components/SceneNavigator';
@@ -604,16 +605,16 @@ export const Editor: React.FC<{ id: string }> = ({ id }) => {
 
   if (loadErr)
     return (
-      <div className="home-main">
-        <div className="error">{loadErr}</div>
-      </div>
+      <Splash
+        error={{
+          title: 'プロジェクトを開けませんでした',
+          message: '削除されたか、URL が違う可能性があります。プロジェクト一覧から開き直してください。',
+          detail: loadErr,
+          action: { label: 'プロジェクト一覧へ', onClick: () => go('/') },
+        }}
+      />
     );
-  if (!project || !timeline || !inputProps)
-    return (
-      <div style={{ height: '100vh', display: 'grid', placeItems: 'center' }}>
-        <div className="spinner" />
-      </div>
-    );
+  if (!project || !timeline || !inputProps) return <Splash message="プロジェクトを開いています…" />;
 
   const sel = Math.min(selected, project.scenes.length - 1);
 
