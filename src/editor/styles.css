@@ -366,6 +366,10 @@ code { font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: 0.92em
    ========================================================================== */
 .home { min-height: 100%; }
 .home-bar { position: sticky; top: 0; z-index: 10; display: flex; align-items: center; gap: 12px; height: 52px; padding: 0 28px; background: var(--glass); backdrop-filter: blur(20px) saturate(1.6); -webkit-backdrop-filter: blur(20px) saturate(1.6); border-bottom: 1px solid var(--separator); }
+/* 戻り先のポータル（SUSHI CREATOR など）へのリンク */
+.portal-back { display: inline-flex; align-items: center; gap: 2px; margin-left: -8px; padding: 5px 8px 5px 4px; border-radius: 8px; color: var(--accent); font-size: 13px; font-weight: 500; text-decoration: none; white-space: nowrap; }
+.portal-back:hover { background: var(--fill); }
+.portal-sep { width: 1px; height: 18px; background: var(--separator); flex: none; }
 .wordmark { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 14px; letter-spacing: -0.01em; }
 .wordmark .logo { width: 24px; height: 24px; border-radius: 6px; display: block; }
 /* バージョン（薄く小さく） */

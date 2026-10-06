@@ -62,6 +62,7 @@ app.get('/api/meta', async (req, res) => {
   ]);
   res.json({
     openai: hasOpenAI(),
+    portal: config.portal,
     models: config.models,
     tts: {
       /** 環境設定（TTS_PROVIDER）で解決した既定のエンジン */

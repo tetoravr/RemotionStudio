@@ -23,6 +23,11 @@ services:
         value: /video-creator
       - key: PUBLIC_URL
         value: https://sushi-creator.sushitop.io/video-creator
+      # 画面の左上に出す「‹ SUSHI CREATOR」の戻り先
+      - key: PORTAL_URL
+        value: https://sushi-creator.sushitop.io/
+      - key: PORTAL_NAME
+        value: SUSHI CREATOR
       - key: PROJECTS_DIR
         value: /var/data/projects
       - key: VOICES_DIR

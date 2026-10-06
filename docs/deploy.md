@@ -113,7 +113,7 @@ Docker で動かす場合は `.env` に `CLOUDFLARE_TUNNEL_TOKEN=` を書き、`
    | `GOOGLE_CLIENT_SECRET` | 手順 1 のシークレット |
 
    - `SESSION_SECRET` は Render が自動で作ります。`AUTH_ALLOWED_DOMAINS` は `sushitopmarketing.com` です（変える時は Environment で）。
-   - `BASE_PATH`・`PUBLIC_URL` は `render.yaml` に書いてあります。
+   - `BASE_PATH`・`PUBLIC_URL` は `render.yaml` に書いてあります。ホーム画面の左上の「‹ SUSHI CREATOR」（ポータルに戻るリンク）も `render.yaml` の `PORTAL_URL`・`PORTAL_NAME` で決まります（無ければリンクは出ません）。
 4. デプロイが終わったら、Web Service の URL（`https://video-creator.onrender.com` など。名前が使われていると `video-creator-xxxx` になります）を控える
 5. **ポータルの静的サイト**（`sushi-creator`）の「Redirects/Rewrites」に、上から次の順で追加して保存する
 

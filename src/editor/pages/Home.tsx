@@ -1,4 +1,4 @@
-import { Copy, Ellipsis, LayoutTemplate, LogOut, Plus, Sparkles, Trash2 } from 'lucide-react';
+import { ChevronLeft, Copy, Ellipsis, LayoutTemplate, LogOut, Plus, Sparkles, Trash2 } from 'lucide-react';
 import React, { useContext, useEffect, useState } from 'react';
 import { FORMATS } from '../../video/schema';
 import { api, type ProjectSummary } from '../api';
@@ -223,6 +223,15 @@ export const Home: React.FC = () => {
   return (
     <div className="home">
       <header className="home-bar">
+        {meta.portal ? (
+          <>
+            <a className="portal-back" href={meta.portal.url} title={`${meta.portal.name} に戻る`}>
+              <Ic n={ChevronLeft} size={16} mr={0} />
+              {meta.portal.name}
+            </a>
+            <span className="portal-sep" aria-hidden="true" />
+          </>
+        ) : null}
         <div className="wordmark">
           <img className="logo" src={withBase('/brand/logo.png')} alt="" />
           Video Creator

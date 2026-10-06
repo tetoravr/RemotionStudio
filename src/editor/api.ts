@@ -4,6 +4,8 @@ import { withBase } from './base';
 
 export type Meta = {
   openai: boolean;
+  /** 戻り先のポータル（SUSHI CREATOR など）。無ければ null */
+  portal?: { url: string; name: string } | null;
   models: { text: string; tts: string; image: string };
   tts: {
     default: TtsProvider;
